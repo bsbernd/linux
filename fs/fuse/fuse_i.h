@@ -467,6 +467,23 @@ struct fuse_pqueue {
 	struct list_head io;
 };
 
+struct fuse_ring_queue {
+	int q_id;
+	int q_depth;
+
+	unsigned long flags;
+	struct task_struct	*ubq_daemon;
+	char *io_cmd_buf;
+
+	unsigned long io_addr;	/* mapped vm address */
+	unsigned int max_io_sz;
+	bool abort_work_pending;
+	unsigned short nr_io_ready;	/* how many ios setup */
+	struct ublk_device *dev;
+	struct ublk_io ios[0];
+
+};
+
 /**
  * Fuse device instance
  */
@@ -527,6 +544,35 @@ struct fuse_sync_bucket {
 	atomic_t count;
 	wait_queue_head_t waitq;
 	struct rcu_head rcu;
+};
+
+struct fuse_ring_req {
+	/* userspace buffer address from io cmd */
+	__u64	addr;
+
+	// unsigned int flags;
+	// int res;
+
+	struct io_uring_cmd *cmd;
+};
+
+struct fuse_ring_queue {
+	// int q_id;
+
+	unsigned long flags;
+	// struct task_struct	*fuse_daemon;
+	char *io_cmd_buf;
+
+	// unsigned long io_addr;	/* mapped vm address */
+	// bool abort_work_pending;
+	// unsigned short nr_io_ready;	/* how many ios setup */
+
+	struct fuse_conn *fc;
+
+	int cpu; // cpu identifier the queue is assigned to
+
+	/* size depends on queue depth */
+	struct fuse_ring_req ring_req[];
 };
 
 /**
@@ -833,6 +879,14 @@ struct fuse_conn {
 
 	/* New writepages go into this bucket */
 	struct fuse_sync_bucket __rcu *curr_bucket;
+
+	/** queues for request handling via uring */
+	struct ring {
+		unsigned int max_io_sz;
+		size_t nr_queues;
+		size_t queue_depth;
+		struct fuse_ring_queue *queues;
+	};
 };
 
 /*
