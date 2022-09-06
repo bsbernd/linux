@@ -467,23 +467,6 @@ struct fuse_pqueue {
 	struct list_head io;
 };
 
-struct fuse_ring_queue {
-	int q_id;
-	int q_depth;
-
-	unsigned long flags;
-	struct task_struct	*ubq_daemon;
-	char *io_cmd_buf;
-
-	unsigned long io_addr;	/* mapped vm address */
-	unsigned int max_io_sz;
-	bool abort_work_pending;
-	unsigned short nr_io_ready;	/* how many ios setup */
-	struct ublk_device *dev;
-	struct ublk_io ios[0];
-
-};
-
 /**
  * Fuse device instance
  */
@@ -886,7 +869,7 @@ struct fuse_conn {
 		size_t nr_queues;
 		size_t queue_depth;
 		struct fuse_ring_queue *queues;
-	};
+	} ring;
 };
 
 /*
