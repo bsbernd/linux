@@ -1,9 +1,15 @@
 {
   "version": 5,
-  "prev": "ed21ae6d235e65ab43cc2ced22211989dc1d6765",
-  "head": "3cc40a443a04d52b0c95255dce264068b01e9bfe",
-  "applied": [],
+  "prev": "201ee1929760bd9ef2b0d7213aa4e0a3bfe1084b",
+  "head": "4dce0838ed065bf37b60fd9eeec7f52f491f760e",
+  "applied": [
+    "fuse-uring-setup"
+  ],
   "unapplied": [],
   "hidden": [],
-  "patches": {}
+  "patches": {
+    "fuse-uring-setup": {
+      "oid": "4dce0838ed065bf37b60fd9eeec7f52f491f760e"
+    }
+  }
 }
