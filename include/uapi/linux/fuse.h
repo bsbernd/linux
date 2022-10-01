@@ -1042,4 +1042,103 @@ struct fuse_secctx_header {
 	uint32_t	nr_secctx;
 };
 
+
+/**
+ * Size of the ring buffer header
+ */
+#define FUSE_RING_HEADER_BUF_SIZE 4096
+
+/**
+ *  Size of the bulk data ring buffer
+ * Different (smaller) values might be possible later, if zerocopy can
+ * be implemented
+ */
+#define FUSE_RING_DATA_BUF_SIZE 1024 * 1024
+
+enum fuse_ring_req_cmd {
+	FUSE_RING_BUF_CMD_INVALID = 0,
+
+	/* return an iovec pointer */
+	FUSE_RING_BUF_CMD_IOVEC = 1,
+
+	/* report an error */
+	FUSE_RING_BUF_CMD_ERROR = 2,
+};
+
+/* XXX: Reduce size as much as possible and fit into the 80B ring cmd */
+struct fuse_uring_buf_req {
+
+	union {
+		/* The first 4K are command data */
+		char in_out_buf[FUSE_RING_HEADER_BUF_SIZE];
+
+		struct {
+			/* fields below are set by kernel on filling a request
+			 * and later also by userspace on replying to a request
+			 */
+
+			uint64_t flags;
+
+			/* enum fuse_ring_buf_cmd */
+			uint32_t cmd;
+
+			union {
+				/* FUSE_URING_REQ_FETCH */
+				struct {
+					uint32_t ring_buf_size;
+				};
+
+				/* FUSE_RING_BUF_CMD_IOVEC_PTR */
+				struct {
+					void *iovec;
+					int32_t count;
+				};
+
+				/* FUSE_RING_BUF_CMD_ERROR */
+				struct {
+					int result; /* always negative */
+				};
+			};
+			uint32_t buf_size_used;
+
+
+			/* kernel fills in, reads out */
+			union {
+				struct fuse_in_header in;
+				struct fuse_out_header out;
+			};
+		};
+	};
+	char buf[];
+};
+
+/**
+ * sqe commands to the kernel
+ */
+enum fuse_uring_cmd {
+	FUSE_URING_REQ_INVALID = 0,
+
+	/* submit sqe to kernel to get a request */
+	FUSE_URING_REQ_FETCH = 1,
+
+	/* commit result and fetch next request */
+	FUSE_URING_REQ_COMMIT_AND_FETCH = 2,
+};
+
+/**
+ * In the 80B command area of the SQE.
+ */
+struct fuse_uring_req_data {
+	/* queue the command is for (queue index) */
+	uint16_t q_id;
+
+	/* queue entry (array index) */
+	uint16_t tag;
+
+	/* Submit the userspace result for the fuse request */
+	uint32_t result;
+
+	void *addr;
+};
+
 #endif /* _LINUX_FUSE_H */
