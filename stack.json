@@ -1,11 +1,10 @@
 {
   "version": 5,
-  "prev": "16501a2663a74b90a681f64c10b9ba8870a1fb76",
-  "head": "de974909e44f79d8fb1b8464d172a906bd57d0b0",
+  "prev": "28f7771120112e681e4a6a1d873c7d3a6906adbe",
+  "head": "4f564f5c32c21b57df6dc3b21d738f7c653a49f0",
   "applied": [
     "fuse-uring-setup",
-    "fuse-dev-use-uring",
-    "refresh-temp"
+    "fuse-dev-use-uring"
   ],
   "unapplied": [],
   "hidden": [],
@@ -14,10 +13,7 @@
       "oid": "8bffad3524741937abf4bed3efa6681ffd63671f"
     },
     "fuse-dev-use-uring": {
-      "oid": "90641c16bbbfbf3be5c0f3e9eda044531072a740"
-    },
-    "refresh-temp": {
-      "oid": "de974909e44f79d8fb1b8464d172a906bd57d0b0"
+      "oid": "4f564f5c32c21b57df6dc3b21d738f7c653a49f0"
     }
   }
 }
