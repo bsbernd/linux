@@ -1069,9 +1069,7 @@ enum fuse_ring_req_cmd {
 	FUSE_RING_BUF_CMD_ERROR = 2,
 };
 
-/**
- * This structure mapped onto the
- */
+/* XXX: Reduce size as much as possible and fit into the 80B ring cmd */
 struct fuse_uring_buf_req {
 
 	union {
@@ -1079,15 +1077,41 @@ struct fuse_uring_buf_req {
 		char in_out_buf[FUSE_RING_HEADER_BUF_SIZE];
 
 		struct {
+			/* fields below are set by kernel on filling a request
+			 * and later also by userspace on replying to a request
+			 */
+
 			uint64_t flags;
 
 			/* enum fuse_ring_buf_cmd */
 			uint32_t cmd;
 
-			uint32_t result;
-			uint32_t buf_size_used;
+			/* size of the data buffer,
+			 * XXX Could be calculated from FUSE_RING_HEADER_BUF_SIZE
+			 * and fuse_uring_cmd_req::req_buf_len - use for
+			 * sanity check
+			 */
+			uint32_t data_buf_size;
 
-			uint32_t nr_data_segs;
+			union {
+				/* FUSE_URING_REQ_FETCH */
+
+				/* FUSE_RING_BUF_CMD_IOVEC_PTR */
+				struct {
+					void *iovec;
+					int32_t count;
+					int32_t iov_flags;
+				};
+
+				/* FUSE_RING_BUF_CMD_ERROR */
+				struct {
+					uint32_t result; /* always negative */
+					uint32_t padding1;
+				};
+			};
+			uint32_t buf_size_used;
+			uint32_t padding2;
+
 
 			/* kernel fills in, reads out */
 			union {
@@ -1096,12 +1120,7 @@ struct fuse_uring_buf_req {
 			};
 		};
 	};
-
-	/* segments of len + data, 8-byte aligned */
-	struct fuse_ring_data_seg {
-		uint64_t len; /* 64 just for alignment */
-		char buf[];
-	} data_seg[];
+	char data_buf[];
 } __attribute__ ((aligned(8)));
 
 /**
