@@ -2403,6 +2403,7 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 		}
 		break;
 	case FUSE_DEV_IOC_URING:
+		pr_info("FUSE_DEV_IOC_URING\n");
 		res = copy_from_user(&ring_conf, (void *)arg, sizeof(ring_conf));
 		if (res == 0)
 			res = fuse_dev_setup_uring(file, &ring_conf);
