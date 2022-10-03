@@ -877,12 +877,16 @@ struct fuse_conn {
 	struct fuse_sync_bucket __rcu *curr_bucket;
 
 	/** queues for request handling via uring */
-	struct ring {
+	struct ring { /* XXX: Move to struct fuse_dev? */
+		spinlock_t lock;
 		unsigned int max_io_sz;
 		size_t nr_queues;
 		size_t queue_depth;
 		struct fuse_ring_queue *queues;
 		int per_core_queue:1;
+		char *cmd_buf;
+		size_t cmd_buf_size;
+		struct mm_struct *mm;
 	} ring;
 };
 

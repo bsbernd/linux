@@ -23,6 +23,8 @@ d
 #include <linux/splice.h>
 #include <linux/sched.h>
 #include <linux/io_uring.h>
+#include <linux/mm.h>
+#include <asm/io.h>
 
 MODULE_ALIAS_MISCDEV(FUSE_MINOR);
 MODULE_ALIAS("devname:fuse");
@@ -89,6 +91,9 @@ static struct fuse_req *fuse_request_alloc_ring(struct fuse_conn *fc)
 	}
 
 	WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_REQ);
+
+
+	pr_info("%s tag %d", __func__, tag);
 
 	return &ring_req->req;
 }
@@ -309,6 +314,10 @@ __releases(fiq->lock)
 		 * shared userspace buffer. Lots of if-conditions in the code,
 		 * though */
 		buf_req->in = req->in.h;
+
+		pr_info("%s op=%d unique=%llu",
+			__func__, buf_req->in.opcode, buf_req->in.unique);
+
 		io_uring_cmd_done(ring_req->cmd, 0, 0);
 	}
 }
@@ -2327,16 +2336,36 @@ static int fuse_device_clone(struct fuse_conn *fc, struct file *new)
 	return 0;
 }
 
+static int fuse_dev_alloc_uring_buf(struct fuse_conn *fc, size_t size)
+{
+	gfp_t gfp_flags = GFP_KERNEL | __GFP_ZERO;
+
+	char *ptr = (void *) __get_free_pages(gfp_flags, get_order(size));
+	if (ptr == NULL) {
+		pr_info("%s: Failed to allocate %zd bytes", __func__, size);
+		return -ENOMEM;
+	}
+
+	fc->ring.cmd_buf = ptr;
+	fc->ring.cmd_buf_size = size;
+
+	return 0;
+}
+
 static int fuse_dev_setup_uring(struct file *file, struct fuse_uring_cfg *cfg)
 {
 	struct fuse_dev *fud = fuse_get_dev(file);
 	struct fuse_conn *fc;
 	size_t queue_size;
 	int q_id;
-
+	int rc;
 
 	if (fud == NULL)
 		return -ENODEV;
+
+	pr_info("%s flags=%llx nq=%d  per-core=%d qdepth=%d\n",
+		__func__, cfg->compat_flags, cfg->num_queues, cfg->per_core_queue,
+		cfg->queue_depth);
 
 	fc = fud->fc;
 
@@ -2346,13 +2375,17 @@ static int fuse_dev_setup_uring(struct file *file, struct fuse_uring_cfg *cfg)
 				"mismatches number of cpus");
 			return -EINVAL;
 		}
-	else
+	} else {
 		if (cfg->num_queues != 1) {
 			pr_info("Per-core-queue not set, expecting a single "
 				"queue");
 			return -EINVAL;
 		}
 	}
+
+	rc = fuse_dev_alloc_uring_buf(fc, cfg->mmap_buf_size);
+	if (rc != 0)
+		return rc;
 
 	queue_size = sizeof(*fc->ring.queues) * cfg->queue_depth;
 	fc->ring.nr_queues = cfg->num_queues;
@@ -2365,7 +2398,6 @@ static int fuse_dev_setup_uring(struct file *file, struct fuse_uring_cfg *cfg)
 		queue->fc = fc;
 		atomic_set(&queue->req_cnt, -1);
 	}
-
 
 	return 0;
 }
@@ -2404,12 +2436,15 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 		}
 		break;
 	case FUSE_DEV_IOC_URING:
+		pr_info("FUSE_DEV_IOC_URING\n");
 		res = copy_from_user(&ring_conf, (void *)arg, sizeof(ring_conf));
 		if (res == 0)
 			res = fuse_dev_setup_uring(file, &ring_conf);
 		else
 			res = -EFAULT;
 
+		pr_info("%s:%d FUSE_DEV_IOC_URING res=%d\n", __func__, __LINE__,
+			res);
 		break;
 	default:
 		res = -ENOTTY;
@@ -2447,7 +2482,6 @@ static ssize_t fuse_dev_do_write_uring(struct fuse_dev *fud,
 		pr_warn("Unsupported fuse-notify\n");
 		goto copy_finish;
 	}
-
 
 	if (oh.error <= -512 || oh.error > 0)
 		goto copy_finish;
@@ -2619,6 +2653,52 @@ static int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags)
 	return -EIOCBQUEUED;
 }
 
+/**
+ *
+ */
+static int fuse_dev_ring_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+	struct fuse_dev *fud = fuse_get_dev(filp);
+	struct fuse_conn *fc = fud->fc;
+	size_t sz = vma->vm_end - vma->vm_start;
+	unsigned long pfn, phys_off = vma->vm_pgoff << PAGE_SHIFT;
+	int ret = 0;
+
+	spin_lock(&fc->ring.lock);
+	if (!fc->ring.mm)
+		fc->ring.mm = current->mm;
+	if (current->mm != fc->ring.mm)
+		ret = -EINVAL;
+	spin_unlock(&fc->ring.lock);
+
+
+	if (ret)
+		goto out;
+
+	/* XXX FIXME */
+#if 0
+	if (vma->vm_flags & VM_WRITE) {
+		ret = -EPERM;
+		pr_info("%s:%d ret: %d\n", __func__, __LINE__, ret);
+		goto out;
+	}
+#endif
+
+	if (sz != fc->ring.cmd_buf_size) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	pfn = virt_to_phys(fc->ring.cmd_buf) >> PAGE_SHIFT;
+	ret = remap_pfn_range(vma, vma->vm_start, pfn, sz, vma->vm_page_prot);
+
+out:
+	pr_info("%s: pid %d addr %lx pg_off %lx sz %lu fc->ring.mm %p ret %d\n",
+		__func__, current->pid, vma->vm_start, phys_off,
+		(unsigned long)sz, fc->ring.mm, ret);
+
+	return ret;
+}
 
 const struct file_operations fuse_dev_operations = {
 	.owner		= THIS_MODULE,
@@ -2634,6 +2714,7 @@ const struct file_operations fuse_dev_operations = {
 	.unlocked_ioctl = fuse_dev_ioctl,
 	.compat_ioctl   = compat_ptr_ioctl,
 	.uring_cmd 	= fuse_dev_uring,
+	.mmap		= fuse_dev_ring_mmap,
 };
 EXPORT_SYMBOL_GPL(fuse_dev_operations);
 
