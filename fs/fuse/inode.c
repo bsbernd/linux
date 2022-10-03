@@ -24,6 +24,7 @@
 #include <linux/posix_acl.h>
 #include <linux/pid_namespace.h>
 #include <uapi/linux/magic.h>
+#include <linux/vmalloc.h>
 
 MODULE_AUTHOR("Miklos Szeredi <miklos@szeredi.hu>");
 MODULE_DESCRIPTION("Filesystem in Userspace");
@@ -847,6 +848,7 @@ void fuse_conn_init(struct fuse_conn *fc, struct fuse_mount *fm,
 	fc->user_ns = get_user_ns(user_ns);
 	fc->max_pages = FUSE_DEFAULT_MAX_PAGES_PER_REQ;
 	fc->max_pages_limit = FUSE_MAX_MAX_PAGES;
+	spin_lock_init(&fc->ring.lock);
 
 	INIT_LIST_HEAD(&fc->mounts);
 	list_add(&fm->fc_entry, &fc->mounts);
@@ -1282,6 +1284,16 @@ EXPORT_SYMBOL_GPL(fuse_send_init);
 void fuse_free_conn(struct fuse_conn *fc)
 {
 	WARN_ON(!list_empty(&fc->devices));
+
+	if (fc->ring.cmd_buf) {
+		if (fc->ring.cmd_buf_size == 0)
+			WARN(1, "Cannot free the fuse conn ring buffer");
+		else {
+			free_pages((unsigned long)fc->ring.cmd_buf,
+				   get_order(fc->ring.cmd_buf_size));
+		}
+	}
+
 	kfree_rcu(fc, rcu);
 }
 EXPORT_SYMBOL_GPL(fuse_free_conn);
