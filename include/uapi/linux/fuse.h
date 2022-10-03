@@ -1092,6 +1092,7 @@ struct fuse_uring_buf_req {
 				struct {
 					void *iovec;
 					int32_t count;
+					int32_t iov_flags;
 				};
 
 				/* FUSE_RING_BUF_CMD_ERROR */
