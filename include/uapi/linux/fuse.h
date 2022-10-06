@@ -951,12 +951,23 @@ struct fuse_notify_retrieve_in {
 };
 
 struct fuse_uring_cfg {
-	uint64_t	flags; /* possible compat flags, unused for now */
-	uint32_t	num_queues;
-	uint32_t	per_core_queue:1;
-	uint32_t	queue_depth;
-	uint32_t	padding1;
-	uint64_t 	padding[8]; /* reserve space for future additions */
+	/* possible compat flags, unused for now */
+	uint64_t	compat_flags;
+
+	/* flag to have a queue per cpu core */
+	uint64_t	per_core_queue:1;
+
+	/* number of queues */
+	uint16_t	num_queues;
+
+	/* number of entries per queue */
+	uint16_t	queue_depth;
+
+	/* for all queues and their requests */
+	uint32_t	mmap_buf_size;
+
+	/* reserved space for future additions */
+	uint64_t	padding2[8];
 };
 
 /* Device ioctls: */
@@ -1053,7 +1064,7 @@ struct fuse_secctx_header {
  * Different (smaller) values might be possible later, if zerocopy can
  * be implemented
  */
-#define FUSE_RING_DATA_BUF_SIZE 1024 * 1024
+#define FUSE_RING_DATA_BUF_SIZE 4 * 1024
 
 enum fuse_ring_req_cmd {
 	FUSE_RING_BUF_CMD_INVALID = 0,
@@ -1081,11 +1092,13 @@ struct fuse_uring_buf_req {
 
 			/* enum fuse_ring_buf_cmd */
 			uint32_t cmd;
+			uint32_t padding1;
 
 			union {
 				/* FUSE_URING_REQ_FETCH */
 				struct {
 					uint32_t ring_buf_size;
+					uint32_t padding2;
 				};
 
 				/* FUSE_RING_BUF_CMD_IOVEC_PTR */
@@ -1097,10 +1110,12 @@ struct fuse_uring_buf_req {
 
 				/* FUSE_RING_BUF_CMD_ERROR */
 				struct {
-					int result; /* always negative */
+					uint32_t result; /* always negative */
+					uint32_t padding3;
 				};
 			};
 			uint32_t buf_size_used;
+			uint32_t padding4;
 
 
 			/* kernel fills in, reads out */
@@ -1111,7 +1126,7 @@ struct fuse_uring_buf_req {
 		};
 	};
 	char buf[];
-};
+} __attribute__ ((aligned(8)));
 
 /**
  * sqe commands to the kernel
