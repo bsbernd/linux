@@ -538,8 +538,9 @@ enum fuse_ring_req_state {
 };
 
 struct fuse_ring_req {
-	/* userspace buffer address from io cmd */
-	void * addr;
+	/* pointer to struct fuse_uring_buf_req  */
+	void * addr_ptr;
+	size_t addr_len;
 
 	/* XXX CAS all states */
 	enum fuse_ring_req_state state;

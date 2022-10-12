@@ -823,6 +823,8 @@ void fuse_conn_init(struct fuse_conn *fc, struct fuse_mount *fm,
 		    struct user_namespace *user_ns,
 		    const struct fuse_iqueue_ops *fiq_ops, void *fiq_priv)
 {
+	pr_debug("%s:%d Here\n", __func__, __LINE__);
+
 	memset(fc, 0, sizeof(*fc));
 	spin_lock_init(&fc->lock);
 	spin_lock_init(&fc->bg_lock);
@@ -858,6 +860,8 @@ EXPORT_SYMBOL_GPL(fuse_conn_init);
 
 void fuse_conn_put(struct fuse_conn *fc)
 {
+	pr_debug("%s:%d Conn put %p \n", __func__, __LINE__, fc);
+
 	if (refcount_dec_and_test(&fc->count)) {
 		struct fuse_iqueue *fiq = &fc->iq;
 		struct fuse_sync_bucket *bucket;
@@ -880,6 +884,8 @@ EXPORT_SYMBOL_GPL(fuse_conn_put);
 
 struct fuse_conn *fuse_conn_get(struct fuse_conn *fc)
 {
+	pr_debug("%s:%d Conn get %p \n", __func__, __LINE__, fc);
+
 	refcount_inc(&fc->count);
 	return fc;
 }
@@ -1284,16 +1290,6 @@ EXPORT_SYMBOL_GPL(fuse_send_init);
 void fuse_free_conn(struct fuse_conn *fc)
 {
 	WARN_ON(!list_empty(&fc->devices));
-
-	if (fc->ring.cmd_buf) {
-		if (fc->ring.cmd_buf_size == 0)
-			WARN(1, "Cannot free the fuse conn ring buffer");
-		else {
-			free_pages((unsigned long)fc->ring.cmd_buf,
-				   get_order(fc->ring.cmd_buf_size));
-		}
-	}
-
 	kfree_rcu(fc, rcu);
 }
 EXPORT_SYMBOL_GPL(fuse_free_conn);
@@ -1772,6 +1768,8 @@ bool fuse_mount_remove(struct fuse_mount *fm)
 	struct fuse_conn *fc = fm->fc;
 	bool last = false;
 
+	pr_debug("%s:%d Here\n", __func__, __LINE__);
+
 	down_write(&fc->killsb);
 	list_del_init(&fm->fc_entry);
 	if (list_empty(&fc->mounts))
@@ -1785,6 +1783,8 @@ EXPORT_SYMBOL_GPL(fuse_mount_remove);
 void fuse_conn_destroy(struct fuse_mount *fm)
 {
 	struct fuse_conn *fc = fm->fc;
+
+	pr_debug("%s:%d Here\n", __func__, __LINE__);
 
 	if (fc->destroy)
 		fuse_send_destroy(fm);
@@ -1815,6 +1815,8 @@ static void fuse_sb_destroy(struct super_block *sb)
 
 void fuse_mount_destroy(struct fuse_mount *fm)
 {
+	pr_debug("%s:%d Here\n", __func__, __LINE__);
+
 	fuse_conn_put(fm->fc);
 	kfree(fm);
 }
