@@ -25,8 +25,6 @@
 #include <linux/mm.h>
 #include <asm/io.h>
 
-#define DEBUG 1
-
 MODULE_ALIAS_MISCDEV(FUSE_MINOR);
 MODULE_ALIAS("devname:fuse");
 
