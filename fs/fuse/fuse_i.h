@@ -538,8 +538,9 @@ enum fuse_ring_req_state {
 };
 
 struct fuse_ring_req {
-	/* userspace buffer address from io cmd */
-	void * addr;
+	/* set from uring sqe */
+	struct fuse_uring_buf_req *addr_ptr;
+	size_t addr_len;
 
 	/* XXX CAS all states */
 	enum fuse_ring_req_state state;
@@ -884,8 +885,7 @@ struct fuse_conn {
 		size_t queue_depth;
 		struct fuse_ring_queue *queues;
 		int per_core_queue:1;
-		char *cmd_buf;
-		size_t cmd_buf_size;
+
 		struct mm_struct *mm;
 	} ring;
 };

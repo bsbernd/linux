@@ -964,7 +964,7 @@ struct fuse_uring_cfg {
 	uint16_t	queue_depth;
 
 	/* for all queues and their requests */
-	uint32_t	mmap_buf_size;
+	uint32_t	mmap_req_size;
 
 	/* reserved space for future additions */
 	uint64_t	padding2[8];
@@ -1059,13 +1059,6 @@ struct fuse_secctx_header {
  */
 #define FUSE_RING_HEADER_BUF_SIZE 4096
 
-/**
- *  Size of the bulk data ring buffer
- * Different (smaller) values might be possible later, if zerocopy can
- * be implemented
- */
-#define FUSE_RING_DATA_BUF_SIZE 4 * 1024
-
 enum fuse_ring_req_cmd {
 	FUSE_RING_BUF_CMD_INVALID = 0,
 
@@ -1092,14 +1085,16 @@ struct fuse_uring_buf_req {
 
 			/* enum fuse_ring_buf_cmd */
 			uint32_t cmd;
-			uint32_t padding1;
+
+			/* size of the data buffer,
+			 * XXX Could be calculated from FUSE_RING_HEADER_BUF_SIZE
+			 * and fuse_uring_cmd_req::req_buf_len - use for
+			 * sanity check
+			 */
+			uint32_t data_buf_size;
 
 			union {
 				/* FUSE_URING_REQ_FETCH */
-				struct {
-					uint32_t ring_buf_size;
-					uint32_t padding2;
-				};
 
 				/* FUSE_RING_BUF_CMD_IOVEC_PTR */
 				struct {
@@ -1111,11 +1106,11 @@ struct fuse_uring_buf_req {
 				/* FUSE_RING_BUF_CMD_ERROR */
 				struct {
 					uint32_t result; /* always negative */
-					uint32_t padding3;
+					uint32_t padding1;
 				};
 			};
 			uint32_t buf_size_used;
-			uint32_t padding4;
+			uint32_t padding2;
 
 
 			/* kernel fills in, reads out */
@@ -1125,7 +1120,7 @@ struct fuse_uring_buf_req {
 			};
 		};
 	};
-	char buf[];
+	char data_buf[];
 } __attribute__ ((aligned(8)));
 
 /**
@@ -1144,7 +1139,7 @@ enum fuse_uring_cmd {
 /**
  * In the 80B command area of the SQE.
  */
-struct fuse_uring_req_data {
+struct fuse_uring_cmd_req {
 	/* queue the command is for (queue index) */
 	uint16_t q_id;
 
@@ -1154,7 +1149,11 @@ struct fuse_uring_req_data {
 	/* Submit the userspace result for the fuse request */
 	uint32_t result;
 
-	void *addr;
+	/* pointer to struct fuse_uring_buf_req */
+	uint64_t req_buf;
+	uint32_t req_buf_len;
+
+	uint32_t padding;
 };
 
 #endif /* _LINUX_FUSE_H */
