@@ -964,7 +964,7 @@ struct fuse_uring_cfg {
 	uint16_t	queue_depth;
 
 	/* for all queues and their requests */
-	uint32_t	mmap_buf_size;
+	uint32_t	mmap_req_size;
 
 	/* reserved space for future additions */
 	uint64_t	padding2[8];

@@ -34,6 +34,8 @@ MODULE_ALIAS("devname:fuse");
 
 static struct kmem_cache *fuse_req_cachep;
 
+static int fuse_dev_uring_read(struct fuse_ring_req *ring_req);
+
 static struct fuse_dev *fuse_get_dev(struct file *file)
 {
 	/*
@@ -272,66 +274,6 @@ const struct fuse_iqueue_ops fuse_dev_fiq_ops = {
 };
 EXPORT_SYMBOL_GPL(fuse_dev_fiq_ops);
 
-
-static int fuse_dev_uring_read_copy(struct fuse_req *req,
-				    struct fuse_uring_buf_req *buf_req)
-{
-	int err;
-	struct fuse_args *args = req->args;
-	struct iov_iter iter;
-	struct fuse_copy_state cs;
-
-	iov_iter_ubuf(&iter, READ, buf, buf_req->data_buf_size);
-	fuse_copy_init(&cs, 1, &iter);
-
-	err = fuse_copy_args(cs, args->in_numargs, args->in_pages,
-	                     (struct fuse_arg *) args->in_args, 0);
-	fuse_copy_finish(cs);
-
-	return err;
-}
-
-static void fuse_dev_uring_read(struct fuse_ring_req *ring_req)
-{
-	struct fuse_req *req;
-	struct fuse_uring_buf_req *buf_req;
-	int err;
-
-	if (ring_req->state != FUSE_RING_REQ_STATE_REQ) {
-		WARN_RATELIMIT(1, "Invalid ring-req state: %d\n",
-				ring_req->state);
-		goto err;
-	}
-
-	err = fuse_dev_uring_read_copy(ring_req, buf_req);
-	if (err) {
-		pr_debug("read_copy failed\n");
-		goto err;
-	}
-
-	ring_req->state = FUSE_RING_REQ_STATE_USERSPACE;
-	buf_req = (struct fuse_uring_buf_req *)ring_req->addr_ptr;
-
-	/* ring req go directly into the shared memory buffer
-	 *
-	 * XXX avoid this have the data for uring immediately in the
-	 * shared userspace buffer. Lots of if-conditions in the code,
-	 * though */
-	buf_req->in = req->in.h;
-
-	pr_debug("%s op=%d unique=%llu",
-		__func__, buf_req->in.opcode, buf_req->in.unique);
-
-	io_uring_cmd_done(ring_req->cmd, 0, 0);
-
-	return;
-
-err:
-	req->out.h.error = -EIO;
-	fuse_request_end(req);
-
-
-}
 
 static void queue_request_and_unlock(struct fuse_iqueue *fiq,
 				     struct fuse_req *req)
@@ -859,6 +801,8 @@ static int fuse_copy_fill(struct fuse_copy_state *cs)
 	} else {
 		size_t off;
 		err = iov_iter_get_pages2(cs->iter, &page, PAGE_SIZE, 1, &off);
+		pr_debug("%s:%d user-backend-iter=%d err=%d",
+			 __func__, __LINE__, user_backed_iter(cs->iter), err);
 		if (err < 0)
 			return err;
 		BUG_ON(!err);
@@ -1143,10 +1087,14 @@ static int fuse_copy_args(struct fuse_copy_state *cs, unsigned numargs,
 
 	for (i = 0; !err && i < numargs; i++)  {
 		struct fuse_arg *arg = &args[i];
-		if (i == numargs - 1 && argpages)
+		if (i == numargs - 1 && argpages) {
 			err = fuse_copy_pages(cs, arg->size, zeroing);
-		else
+			pr_debug("%s:%d err=%d\n", __func__, __LINE__, err);
+		}
+		else {
 			err = fuse_copy_one(cs, arg->value, arg->size);
+			pr_debug("%s:%d err=%d\n", __func__, __LINE__, err);
+		}
 	}
 	return err;
 }
@@ -1560,6 +1508,67 @@ static int fuse_notify_poll(struct fuse_conn *fc, unsigned int size,
 
 err:
 	fuse_copy_finish(cs);
+	return err;
+}
+
+static int fuse_dev_uring_read_copy_args(struct fuse_req *req,
+					 struct fuse_uring_buf_req *buf_req)
+{
+	int err;
+	struct fuse_args *args = req->args;
+	struct iov_iter iter;
+	struct fuse_copy_state cs;
+
+	pr_debug("%s:%d buf=%p len=%d",
+		 __func__, __LINE__, buf_req->data_buf, buf_req->data_buf_size);
+
+	iov_iter_ubuf(&iter, READ, buf_req->data_buf, buf_req->data_buf_size);
+
+	fuse_copy_init(&cs, 1, &iter);
+	err = fuse_copy_args(&cs, args->in_numargs, args->in_pages,
+	                     (struct fuse_arg *) args->in_args, 0);
+	fuse_copy_finish(&cs);
+
+	return err;
+}
+
+static int fuse_dev_uring_read(struct fuse_ring_req *ring_req)
+{
+	struct fuse_req *req = &ring_req->req;
+	struct fuse_uring_buf_req *buf_req = ring_req->addr_ptr;
+	int err;
+
+	if (ring_req->state != FUSE_RING_REQ_STATE_REQ) {
+		WARN_RATELIMIT(1, "Invalid ring-req state: %d\n",
+				ring_req->state);
+		goto err;
+	}
+
+	err = fuse_dev_uring_read_copy_args(req, buf_req);
+	if (err) {
+		pr_debug("read_copy failed: %d\n", err);
+		goto err;
+	}
+
+	ring_req->state = FUSE_RING_REQ_STATE_USERSPACE;
+
+	/* ring req go directly into the shared memory buffer
+	 *
+	 * XXX avoid this have the data for uring immediately in the
+	 * shared userspace buffer. Lots of if-conditions in the code,
+	 * though */
+	buf_req->in = req->in.h;
+
+	pr_debug("%s op=%d unique=%llu\n",
+		__func__, buf_req->in.opcode, buf_req->in.unique);
+
+	io_uring_cmd_done(ring_req->cmd, 0, 0);
+
+	return 0;
+
+err:
+	req->out.h.error = -EIO;
+	fuse_request_end(req);
 	return err;
 }
 
@@ -2234,19 +2243,8 @@ static void end_polls(struct fuse_conn *fc)
  */
 static void fuse_destroy_uring(struct fuse_conn *fc)
 {
-	pr_debug("cmd_buf=%p queues=%p", fc->ring.cmd_buf, fc->ring.queues);
 
 	spin_lock(&fc->ring.lock);
-	if (fc->ring.cmd_buf) {
-		if (fc->ring.cmd_buf_size == 0)
-			WARN(1, "Cannot free the fuse conn ring buffer");
-		else {
-			free_pages((unsigned long)fc->ring.cmd_buf,
-				   get_order(fc->ring.cmd_buf_size));
-		}
-		fc->ring.cmd_buf = NULL;
-	}
-
 	if (fc->ring.queues) {
 		int q_id, tag, state;
 		struct fuse_ring_req *req;
@@ -2431,29 +2429,13 @@ static int fuse_device_clone(struct fuse_conn *fc, struct file *new)
 	return 0;
 }
 
-static int fuse_dev_alloc_uring_buf(struct fuse_conn *fc, size_t size)
-{
-	gfp_t gfp_flags = GFP_KERNEL | __GFP_ZERO;
-
-	char *ptr = (void *) __get_free_pages(gfp_flags, get_order(size));
-	if (ptr == NULL) {
-		pr_info("%s: Failed to allocate %zd bytes", __func__, size);
-		return -ENOMEM;
-	}
-
-	fc->ring.cmd_buf = ptr;
-	fc->ring.cmd_buf_size = size;
-
-	return 0;
-}
-
 static int fuse_dev_setup_uring(struct file *file, struct fuse_uring_cfg *cfg)
 {
 	struct fuse_dev *fud = fuse_get_dev(file);
 	struct fuse_conn *fc;
+	size_t req_size;
 	size_t queue_size;
 	int q_id;
-	int rc;
 
 	if (fud == NULL)
 		return -ENODEV;
@@ -2478,11 +2460,9 @@ static int fuse_dev_setup_uring(struct file *file, struct fuse_uring_cfg *cfg)
 		}
 	}
 
-	rc = fuse_dev_alloc_uring_buf(fc, cfg->mmap_buf_size);
-	if (rc != 0)
-		return rc;
+	req_size = cfg->queue_depth * sizeof(struct fuse_ring_req);
+	queue_size = (sizeof(*fc->ring.queues) + req_size) * cfg->num_queues;
 
-	queue_size = sizeof(*fc->ring.queues) * cfg->queue_depth;
 	fc->ring.nr_queues = cfg->num_queues;
 	fc->ring.queue_depth = cfg->queue_depth;
 	fc->ring.per_core_queue = cfg->per_core_queue;
@@ -2496,6 +2476,10 @@ static int fuse_dev_setup_uring(struct file *file, struct fuse_uring_cfg *cfg)
 
 		for (tag = 0; tag < fc->ring.queue_depth; tag++) {
 			struct fuse_ring_req *req = &queue->ring_req[tag];
+
+			pr_debug("initialize qid=%d tag=%d queue=%p req=%p",
+				 q_id, tag, queue, req);
+
 			WRITE_ONCE(req->state, FUSE_RING_REQ_STATE_INIT);
 		}
 	}
@@ -2640,7 +2624,7 @@ static int fuse_dev_uring_commit(struct fuse_dev *fud,
 				 struct fuse_ring_req *ring_req)
 {
 	struct fuse_uring_buf_req *buf_req =
-		(struct fuse_uring_buf_req *)ring_req->addr;
+		(struct fuse_uring_buf_req *)ring_req->addr_ptr;
 	const struct iovec __user *vec = buf_req->iovec;
 	unsigned long vlen = buf_req->count;
 	struct iovec iovstack[UIO_FASTIOV];
@@ -2672,7 +2656,7 @@ free_iov:
 /**
  * XXX: Needs to check if ring_req is next and still free avail
  */
-void fuse_dev_uring_fetch_queued(struct fuse_conn *fc, struct fuse_ring_req *ring_req)
+int fuse_dev_uring_fetch_queued(struct fuse_conn *fc, struct fuse_ring_req *ring_req)
 {
 	struct fuse_iqueue *fiq = &fc->iq;
 	struct fuse_req *q_req;
@@ -2688,10 +2672,13 @@ void fuse_dev_uring_fetch_queued(struct fuse_conn *fc, struct fuse_ring_req *rin
 	spin_unlock(&fiq->lock);
 
 	/* copy over and release the list-queued object */
-	ring_req->req = q_req;
+	ring_req->req = *q_req;
 	fuse_put_request(q_req);
 
-	fuse_dev_uring_read(ring_req);
+	pr_debug("%s: args=%p ring-args=%p\n",
+		 __func__, q_req->args, ring_req->req.args);
+
+	return fuse_dev_uring_read(ring_req);
 }
 
 static int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags)
@@ -2705,25 +2692,33 @@ static int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags)
 	u32 cmd_op = cmd->cmd_op;
 	int ret = -EINVAL;
 
-	pr_info("%s: received: cmd op %d queue %d tag %d result %d\n",
-		 __func__, cmd_op, cmd_req->q_id, cmd_req->tag,
-		 cmd_req->result);
-
-	if (!(issue_flags & IO_URING_F_SQE128))
+	if (!(issue_flags & IO_URING_F_SQE128)) {
+		pr_info("qid=%d tag=%d SQE128 not set\n",
+			cmd_req->q_id, cmd_req->tag);
 		goto err;
+	}
 
-	if (cmd_req->q_id >= fc->ring.nr_queues)
+	if (cmd_req->q_id >= fc->ring.nr_queues) {
+		pr_info("qid=%u > nr-queues=%zu\n",
+			cmd_req->q_id, fc->ring.nr_queues);
 		goto err;
+	}
 	queue = &fc->ring.queues[cmd_req->q_id];
 
-	if (cmd_req->tag > fc->ring.queue_depth)
+	if (cmd_req->tag > fc->ring.queue_depth) {
+		pr_info("tag=%u > queue-depth=%zu\n",
+			cmd_req->tag, fc->ring.queue_depth);
 		goto err;
+	}
 	ring_req = &queue->ring_req[cmd_req->tag];
+
+	pr_info("%s: received: cmd op %d queue %d (%p) tag %d  (%p) result %d\n",
+		 __func__, cmd_op, cmd_req->q_id, queue, cmd_req->tag, ring_req,
+		 cmd_req->result);
 
 	switch (cmd_op) {
 	case FUSE_URING_REQ_FETCH:
 
-		/* there is pending io cmd, something must be wrong */
 		if (READ_ONCE(ring_req->state) != FUSE_RING_REQ_STATE_INIT) {
 			pr_debug("%s: q_id: %d tag: %d invalid req state: %d\n",
 				 __func__, cmd_req->q_id, cmd_req->tag,
@@ -2731,35 +2726,58 @@ static int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags)
 			goto err;
 		}
 
-		/* FETCH_RQ has to provide IO buffer */
-		if (cmd_req->req_buf == NULL)
-			goto err;
-
 		ring_req->cmd = cmd;
-		WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_WAITING);
 
-		// XXX: Verify if ring_req->addr_ptr and len is valid!
-		ring_req->addr_ptr = cmd_req->req_buf;
+		ring_req->addr_ptr = (struct fuse_uring_buf_req *)cmd_req->req_buf;
 		ring_req->addr_len = cmd_req->req_buf_len;
 
+		if (!cmd_req->req_buf) {
+			pr_info("Request has no buffer\n");
+		}
+
+		if (!access_ok(ring_req->addr_ptr, ring_req->addr_len)) {
+			pr_info("Invalid request buffer\n");
+			goto err;
+		}
+
+		if (!access_ok(ring_req->addr_ptr->data_buf,
+			       ring_req->addr_ptr->data_buf_size)) {
+			pr_info("Invalid request data buffer\n");
+			goto err;
+		}
+
+		pr_info("%s:%d data-buf=%p len=%d\n", __func__, __LINE__,
+			ring_req->addr_ptr->data_buf,
+			ring_req->addr_ptr->data_buf_size);
+
 		/* XXX generalize, we need this queue */
-		if (cmd_req->q_id == 0 && cmd_req->tag == 0)
-			fuse_dev_uring_fetch_queued(fc, ring_req);
+		if (cmd_req->q_id == 0 && cmd_req->tag == 0) {
+			ret = fuse_dev_uring_fetch_queued(fc, ring_req);
+			if (ret != 0)
+				goto err;
+			WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_USERSPACE);
+		} else
+			WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_WAITING);
 
 		break;
 	case FUSE_URING_REQ_COMMIT_AND_FETCH:
 		/* user space forgot to send the buffer - invalid command */
-		if (cmd_req->req_buf == NULL) {
+		if (!cmd_req->req_buf) {
 			goto err;
 		}
-		if (ring_req->state != FUSE_RING_REQ_STATE_USERSPACE)
-			goto err;
+		if (ring_req->state != FUSE_RING_REQ_STATE_USERSPACE) {
+			pr_info("Invalid request state %d, expected %d \n",
+				ring_req->state, FUSE_RING_REQ_STATE_USERSPACE);
+			//goto err;
+		}
 		ring_req->cmd = cmd;
 		WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_COMMIT);
 
-		// XXX: Verify if ring_req->addr_ptr and len is valid!
-		ring_req->addr_ptr = cmd_req->req_buf;
-		ring_req->addr_len = cmd_req->req_buf_len;
+		if (ring_req->addr_ptr != (void *)cmd_req->req_buf ||
+		    ring_req->addr_len != cmd_req->req_buf_len) {
+			pr_info("Request buffer mismatch\n");
+			goto err;
+		}
 
 		fuse_dev_uring_commit(fud, ring_req);
 
@@ -2782,6 +2800,31 @@ static int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags)
 	return -EIOCBQUEUED;
 }
 
+static int fuse_dev_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	unsigned long len = vma->vm_end - vma->vm_start;
+	void *bufp;
+	unsigned int off;
+	int err;
+	const int flags = GFP_KERNEL | __GFP_COMP |__GFP_ZERO;
+
+	bufp = (void *)__get_free_pages(flags, get_order(len));
+	if (!bufp)
+		return -ENOMEM;
+
+	for (off = 0; off < len; off += PAGE_SIZE) {
+		struct page *page = virt_to_page(bufp + off);
+
+		err = vm_insert_page(vma, vma->vm_start + off, page);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+
+#if 0
 static int fuse_dev_ring_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	struct fuse_dev *fud = fuse_get_dev(filp);
@@ -2815,6 +2858,7 @@ out:
 
 	return ret;
 }
+#endif
 
 const struct file_operations fuse_dev_operations = {
 	.owner		= THIS_MODULE,
@@ -2830,7 +2874,7 @@ const struct file_operations fuse_dev_operations = {
 	.unlocked_ioctl = fuse_dev_ioctl,
 	.compat_ioctl   = compat_ptr_ioctl,
 	.uring_cmd 	= fuse_dev_uring,
-	.mmap		= fuse_dev_ring_mmap,
+	.mmap		= fuse_dev_mmap,
 };
 EXPORT_SYMBOL_GPL(fuse_dev_operations);
 
