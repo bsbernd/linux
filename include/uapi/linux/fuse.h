@@ -1057,7 +1057,8 @@ struct fuse_secctx_header {
 /**
  * Size of the ring buffer header
  */
-#define FUSE_RING_HEADER_BUF_SIZE 4096
+#define FUSE_RING_HEADER_BUF_SIZE 8192
+#define FUSE_RING_IN_OUT_ARG_SIZE 4096
 
 enum fuse_ring_req_cmd {
 	FUSE_RING_BUF_CMD_INVALID = 0,
@@ -1069,59 +1070,55 @@ enum fuse_ring_req_cmd {
 	FUSE_RING_BUF_CMD_ERROR = 2,
 };
 
-/* XXX: Reduce size as much as possible and fit into the 80B ring cmd */
+#define FUSE_RING_BUF_HEADER_MAX_SEGS 8
+
+/**
+ * This structure mapped onto the
+ */
 struct fuse_uring_buf_req {
 
 	union {
 		/* The first 4K are command data */
-		char in_out_buf[FUSE_RING_HEADER_BUF_SIZE];
+		char ring_header[FUSE_RING_HEADER_BUF_SIZE];
 
 		struct {
-			/* fields below are set by kernel on filling a request
-			 * and later also by userspace on replying to a request
-			 */
-
 			uint64_t flags;
 
 			/* enum fuse_ring_buf_cmd */
 			uint32_t cmd;
 
-			/* size of the data buffer,
-			 * XXX Could be calculated from FUSE_RING_HEADER_BUF_SIZE
-			 * and fuse_uring_cmd_req::req_buf_len - use for
-			 * sanity check
-			 */
-			uint32_t data_buf_size;
-
-			union {
-				/* FUSE_URING_REQ_FETCH */
-
-				/* FUSE_RING_BUF_CMD_IOVEC_PTR */
-				struct {
-					void *iovec;
-					int32_t count;
-					int32_t iov_flags;
-				};
-
-				/* FUSE_RING_BUF_CMD_ERROR */
-				struct {
-					uint32_t result; /* always negative */
-					uint32_t padding1;
-				};
-			};
-			uint32_t buf_size_used;
-			uint32_t padding2;
-
+			uint32_t nr_data_segs;
 
 			/* kernel fills in, reads out */
 			union {
 				struct fuse_in_header in;
 				struct fuse_out_header out;
 			};
+
+			uint32_t padding1;
+			uint32_t in_out_arg_len;
+			char in_out_arg[4096];
+
+			/* More of these can be within data[] below - then
+			 * alwas one page
+			 * The header array holds arbitrary
+			 * FUSE_RING_INITIAL_MAX_SEGS
+			 */
+			struct fuse_ring_seg_extents {
+
+				/* number of segments within this array */
+				uint32_t nr_segs;
+
+				/* offset to the next array */
+				uint32_t next_array_off;
+
+				uint32_t seg_len[];
+			} extents;
 		};
 	};
-	char data_buf[];
-} __attribute__ ((aligned(8)));
+
+	char data[];
+};
 
 /**
  * sqe commands to the kernel
@@ -1146,14 +1143,10 @@ struct fuse_uring_cmd_req {
 	/* queue entry (array index) */
 	uint16_t tag;
 
-	/* Submit the userspace result for the fuse request */
-	uint32_t result;
+	uint32_t req_buf_len;
 
 	/* pointer to struct fuse_uring_buf_req */
 	uint64_t req_buf;
-	uint32_t req_buf_len;
-
-	uint32_t padding;
 };
 
 #endif /* _LINUX_FUSE_H */
