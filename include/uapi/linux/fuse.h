@@ -1103,8 +1103,8 @@ struct fuse_uring_buf_req {
 	/* segments of len + data, 8-byte aligned */
 	struct fuse_ring_data_seg {
 		uint64_t len; /* 64 just for alignment */
-		char buf[1]; /* 1 buffer minimum */
-	} data_seg[1];
+		char buf[];
+	} data_seg[];
 } __attribute__ ((aligned(8)));
 
 /**

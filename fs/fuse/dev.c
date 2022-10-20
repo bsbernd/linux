@@ -1590,6 +1590,12 @@ err:
 	return err;
 }
 
+/**
+ * This functions is called _read_ to have it in sync with similar
+ * functions that use posix read()/write() IO to /dev/fuse. In the application
+ * write path these fuse userspace _reads: data from /dev/fuse. With uring
+ * this is a bit confusing, as there is no read involved here.
+ */
 static int fuse_dev_uring_read_copy_args(struct fuse_ring_req *ring_req,
 					 struct fuse_uring_buf_req *buf_req)
 {
@@ -1612,6 +1618,17 @@ static int fuse_dev_uring_read_copy_args(struct fuse_ring_req *ring_req,
 	err = fuse_copy_args(&cs, args->in_numargs, args->in_pages,
 			     (struct fuse_arg *) args->in_args, 0);
 	fuse_copy_finish(&cs);
+
+	if (cs.ring.nr_segs > 1) {
+		/* do_write_buf() in libfuse does not support more than
+		 * one segment.
+		 * XXX Update libfuse before final uring support and add
+		 *     a uring specific handler? Or support with new feature
+		 *     flag later on?
+		 */
+		return -EINVAL;
+	}
+
 	buf_req->nr_data_segs = cs.ring.nr_segs;
 
 	buf_req->buf_size_used = cs.ring.buf_used;
@@ -2661,7 +2678,7 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 	return res;
 }
 
-static ssize_t fuse_dev_do_write_uring(struct fuse_dev *fud,
+static ssize_t fuse_dev_uring_do_write(struct fuse_dev *fud,
 				       struct fuse_ring_req *ring_req,
 				       struct fuse_copy_state *cs, size_t nbytes)
 {
@@ -2776,7 +2793,7 @@ static int fuse_dev_uring_commit(struct fuse_dev *fud,
 
 		fuse_copy_init(&cs, 0, &iter);
 
-		ret = fuse_dev_do_write_uring(fud, ring_req, &cs,
+		ret = fuse_dev_uring_do_write(fud, ring_req, &cs,
 					      iov_iter_count(&iter));
 free_iov:
 		kfree(iov);
