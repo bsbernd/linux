@@ -1069,6 +1069,8 @@ enum fuse_ring_req_cmd {
 	FUSE_RING_BUF_CMD_ERROR = 2,
 };
 
+#define FUSE_RING_BUF_HEADER_MAX_SEGS 8
+
 /**
  * This structure mapped onto the
  */
@@ -1084,28 +1086,38 @@ struct fuse_uring_buf_req {
 			/* enum fuse_ring_buf_cmd */
 			uint32_t cmd;
 
-			uint32_t data_buf_size;
-
 			uint32_t result;
 			uint32_t buf_size_used;
 
 			uint32_t nr_data_segs;
-			uint32_t padding;
 
 			/* kernel fills in, reads out */
 			union {
 				struct fuse_in_header in;
 				struct fuse_out_header out;
 			};
+
+			/* More of these can be within data[] below - then
+			 * alwas one page
+			 * The header array holds arbitrary
+			 * FUSE_RING_INITIAL_MAX_SEGS
+			 */
+			struct fuse_ring_seg_extents {
+
+				/* number of segments within this array */
+				uint32_t nr_segs;
+
+				/* offset to the next array */
+				uint32_t next_array_off;
+
+				uint32_t seg_len[0];
+			} extents;
 		};
 	};
 
-	/* segments of len + data, 8-byte aligned */
-	struct fuse_ring_data_seg {
-		uint64_t len; /* 64 just for alignment */
-		char buf[];
-	} data_seg[];
+	char data[];
 } __attribute__ ((aligned(8)));
+
 
 /**
  * sqe commands to the kernel
