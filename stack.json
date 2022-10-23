@@ -1,10 +1,11 @@
 {
   "version": 5,
-  "prev": "4aa611019e7fca8ca8ba869c61bb907e23029ec0",
-  "head": "4fe89d07dcc2804c8b562f6c7896a45643d34b2f",
-  "applied": [],
+  "prev": "5505817fd920e7afa0d69d2c30999bf758df9ae6",
+  "head": "ec2d82f193050c668557878245c20996353b773d",
+  "applied": [
+    "fuse-uring-setup"
+  ],
   "unapplied": [
-    "fuse-uring-setup",
     "fuse-dev-use-uring",
     "tmp2",
     "tmp3",
