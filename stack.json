@@ -1,12 +1,12 @@
 {
   "version": 5,
-  "prev": "5505817fd920e7afa0d69d2c30999bf758df9ae6",
-  "head": "ec2d82f193050c668557878245c20996353b773d",
+  "prev": "fb30a16286607af33f6aeaf0ca81c3436961b6c5",
+  "head": "6166689b563a37b937a97b0a293d4034d2bb27e5",
   "applied": [
-    "fuse-uring-setup"
+    "fuse-uring-setup",
+    "fuse-dev-use-uring"
   ],
   "unapplied": [
-    "fuse-dev-use-uring",
     "tmp2",
     "tmp3",
     "tmp"
