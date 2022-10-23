@@ -1084,13 +1084,10 @@ struct fuse_uring_buf_req {
 			/* enum fuse_ring_buf_cmd */
 			uint32_t cmd;
 
-			uint32_t data_buf_size;
-
 			uint32_t result;
 			uint32_t buf_size_used;
 
 			uint32_t nr_data_segs;
-			uint32_t padding;
 
 			/* kernel fills in, reads out */
 			union {

@@ -752,20 +752,25 @@ static void fuse_copy_init(struct fuse_copy_state *cs, int write,
 static void fuse_copy_finish(struct fuse_copy_state *cs)
 {
 	if (cs->is_uring) {
-		int vec_size;
-		/* a copy from/to the ring buffer does not
-		 * want to do anything _before_ any work was done.
-		 * Using cs->ring.nr_segs allows to call this function
-		 * at anytime, without causing harm.
-		 */
-		if (cs->ring.seg[cs->ring.nr_segs].len == 0)
-			return;
+		if (!cs->write) {
+			int vec_size;
+			/* a copy from/to the ring buffer does not
+			 * want to do anything _before_ any work was done.
+			 * Using cs->ring.nr_segs allows to call this function
+			 * at anytime, without causing harm.
+			 */
+			if (cs->ring.seg[cs->ring.nr_segs].len == 0)
+				return;
 
-		/* segments are 8 byte aligned in the ring buffers */
-		vec_size = round_up(cs->ring.seg[0].len, 8);
-		cs->ring.seg = ((char *)cs->ring.seg) + vec_size;
-		cs->ring.nr_segs++;
-		cs->offset = 0;
+			/* segments are 8 byte aligned in the ring buffers,
+			 * set the next segment */
+			vec_size = round_up(cs->ring.seg[0].len, 8);
+			cs->ring.seg = (void *)((char *)cs->ring.seg) + vec_size;
+
+			if (!cs->write)
+				cs->ring.nr_segs++;
+			cs->offset = 0;
+		}
 	} else if (cs->currbuf) {
 		struct pipe_buffer *buf = cs->currbuf;
 
@@ -854,12 +859,11 @@ static int fuse_copy_do_ring(struct fuse_copy_state *cs, void **val,
 			     unsigned *size)
 {
 	unsigned ncpy = min(*size, cs->len);
+	char *vec_buf = cs->ring.seg->buf + cs->offset;
 
 	pr_debug("%s: write=%d buf=%p *val=%p size=%u len=%u offset=%u npy=%u",
 		 __func__, cs->write, cs->ring.seg->buf, val, *size, cs->len,
 		 cs->offset, ncpy);
-
-	char *vec_buf = cs->ring.seg->buf + cs->offset;
 
 	if (val) {
 		if (cs->write) {
@@ -1607,9 +1611,8 @@ static int fuse_dev_uring_read_copy_args(struct fuse_ring_req *ring_req,
 	int buf_sz = fc->ring.ring_req_size - FUSE_RING_HEADER_BUF_SIZE;
 
 	fuse_copy_init(&cs, 1, NULL);
-
 	cs.is_uring = 1;
-	cs.ring.seg = (char *)buf_req->data_seg;
+	cs.ring.seg = buf_req->data_seg;
 	cs.ring.buf_len = buf_sz;
 
 	pr_debug("%s:%d Here buf=%p buf-sz=%d\n",
@@ -2076,10 +2079,10 @@ static int copy_out_args(struct fuse_copy_state *cs, struct fuse_args *args,
 		return -EINVAL;
 	}
 	else if (reqsize > nbytes) {
-		pr_debug("%s:%d Here.\n", __func__, __LINE__);
-
 		struct fuse_arg *lastarg = &args->out_args[args->out_numargs-1];
 		unsigned diffsize = reqsize - nbytes;
+
+		pr_debug("%s:%d Here.\n", __func__, __LINE__);
 
 		if (diffsize > lastarg->size)
 			return -EINVAL;
@@ -2678,130 +2681,105 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 	return res;
 }
 
-static ssize_t fuse_dev_uring_do_write(struct fuse_dev *fud,
-				       struct fuse_ring_req *ring_req,
-				       struct fuse_copy_state *cs, size_t nbytes)
+/**
+ *
+ * @return 1 if there is an error, 0 otherise
+ */
+static int fuse_dev_uring_write_is_err(struct fuse_conn *fc,
+				       struct fuse_ring_req *ring_req)
 {
-	int err;
-	struct fuse_conn *fc = fud->fc;
-	struct fuse_out_header oh;
+	struct fuse_uring_buf_req *buf_req = ring_req->kbuf;
 	struct fuse_req *req = &ring_req->req;
+	struct fuse_out_header *oh = &buf_req->out;
+	int err;
 
-	/* XXX Make this a flag in fuse_uring_buf_req and allow to have this
-	 * directly in the buffer
-	 */
-	if (1) {
-		pr_debug("%s:%d Here.\n", __func__, __LINE__);
-		err = fuse_copy_one(cs, &oh, sizeof(oh));
-		pr_debug("%s:%d Here err=%d.\n", __func__, __LINE__, err);
-		if (err)
-			goto copy_finish;
-
-	err = -EINVAL;
-	if (oh.len != nbytes)
-		goto copy_finish;
-	}
-
-	if (oh.unique == 0) {
+	if (oh->unique == 0) {
 		/* Not supportd through request based uring, this needs another
 		 * ring from user space to kernel
 		 */
 		pr_warn("Unsupported fuse-notify\n");
-		goto copy_finish;
+		err = -EINVAL;
+		goto err;
 	}
 
-	if (oh.error <= -512 || oh.error > 0)
-		goto copy_finish;
+	if (buf_req->result < 0) {
+		err = buf_req->result;
+		goto err;
+	}
 
-	if ((oh.unique & ~FUSE_INT_REQ_BIT) != req->in.h.unique) {
-		err = -ENOENT;
+	if (oh->error <= -512 || oh->error > 0) {
+		err = -EINVAL;
+		goto err;
+	}
+
+	if (oh->error) {
+		err = oh->error;
+		goto err;
+	}
+
+	if ((oh->unique & ~FUSE_INT_REQ_BIT) != req->in.h.unique) {
+
 		pr_warn("Unpexted seqno mismatch, expected: %llu got %llu\n",
-			req->in.h.unique, oh.unique & ~FUSE_INT_REQ_BIT);
-		goto copy_finish;
+			req->in.h.unique, oh->unique & ~FUSE_INT_REQ_BIT);
+		err = -ENOENT;
+		goto err;
 	}
 
-	/* Is it an interrupt reply ID? */
-	if (oh.unique & FUSE_INT_REQ_BIT) {
+	/* Is it an interrupt reply ID?
+	 * XXX: Verifiy if right
+	 */
+	if (oh->unique & FUSE_INT_REQ_BIT) {
 		err = 0;
-		if (nbytes != sizeof(struct fuse_out_header))
-			err = -EINVAL;
-		else if (oh.error == -ENOSYS)
+		if (oh->error == -ENOSYS)
 			fc->no_interrupt = 1;
-		else if (oh.error == -EAGAIN) {
+		else if (oh->error == -EAGAIN) {
 			/* XXX Needs to copy to the next cq and submit it */
 			// err = queue_interrupt(req);
 			pr_warn("Intrerupt EAGAIN not supported yet");
-
+			err = -EINVAL;
 		}
 
-		goto copy_finish;
+		goto err;
 	}
 
-	clear_bit(FR_SENT, &req->flags);
-	req->out.h = oh;
-	set_bit(FR_LOCKED, &req->flags);
-	cs->req = req;
-	if (!req->args->page_replace)
-		cs->move_pages = 0;
+	return 0;
 
-	if (oh.error)
-		err = nbytes != sizeof(oh) ? -EINVAL : 0;
-	else {
-		pr_debug("%s:%d Here.\n", __func__, __LINE__);
-		err = copy_out_args(cs, req->args, nbytes);
-		pr_debug("%s:%d err=%d\n", __func__, __LINE__, err);
-	}
-	fuse_copy_finish(cs);
-
-	clear_bit(FR_LOCKED, &req->flags);
-
-	fuse_request_end(req);
-
-	pr_debug("%s:%d err=%d oh.error=%d req->out.h.error=%d \n",
-		 __func__, __LINE__, err, oh.error, req->out.h.error);
-
-out:
-	return err ? err : nbytes;
-
-copy_finish:
-	fuse_copy_finish(cs);
-	goto out;
+err:
+	ring_req->req.out.h.error = err;
+	return 1;
 
 }
 
-static int fuse_dev_uring_commit(struct fuse_dev *fud,
+static void fuse_dev_uring_write(struct fuse_dev *fud,
 				 struct fuse_ring_req *ring_req)
 {
 	struct fuse_uring_buf_req *buf_req = ring_req->kbuf;
-	const struct iovec __user *vec = buf_req->iovec;
-	unsigned long vlen = buf_req->count;
-	struct iovec iovstack[UIO_FASTIOV];
-	struct iovec *iov = iovstack;
-	struct iov_iter iter;
-	ssize_t ret;
+	struct fuse_req *req = &ring_req->req;
 	struct fuse_copy_state cs;
+	ssize_t err;
 
 	pr_debug("%s:%d Importing iovec\n", __func__, __LINE__);
 
-	ret = import_iovec(WRITE, vec, vlen, ARRAY_SIZE(iovstack), &iov, &iter);
-	if (ret >= 0) {
-
-		if (!user_backed_iter(&iter)) {
-			ret =  -EINVAL;
-			goto free_iov;
-		}
-
-		fuse_copy_init(&cs, 0, &iter);
-
-		ret = fuse_dev_uring_do_write(fud, ring_req, &cs,
-					      iov_iter_count(&iter));
-free_iov:
-		kfree(iov);
+	if (fuse_dev_uring_write_is_err(fud->fc, ring_req)) {
+		fuse_request_end(&ring_req->req);
 	}
 
-	pr_debug("%s:%d ret=%zd", __func__, __LINE__, ret);
+	fuse_copy_init(&cs, 0, NULL);
+	cs.is_uring = true;
+	cs.is_uring = 1;
 
-	return ret;
+	/* XXX FIXME NOW */
+	cs.ring.seg = buf_req->data_seg;
+	cs.ring.buf_len = buf_req->buf_size_used;
+	cs.ring.nr_segs = buf_req->nr_data_segs;
+
+	pr_debug("%s:%d Here buf=%p buf-sz=%zu\n",
+		 __func__, __LINE__, cs.ring.seg[0].buf, cs.ring.buf_len);
+
+	err = copy_out_args(&cs, req->args, buf_req->buf_size_used);
+	fuse_copy_finish(&cs);
+
+	pr_debug("%s:%d ret=%zd", __func__, __LINE__, err);
 }
 
 /**
@@ -2920,7 +2898,7 @@ static int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags)
 		ring_req->cmd = cmd;
 		WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_COMMIT);
 
-		fuse_dev_uring_commit(fud, ring_req);
+		fuse_dev_uring_write(fud, ring_req);
 
 		break;
 	default:
