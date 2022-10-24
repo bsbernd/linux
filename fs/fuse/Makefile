@@ -3,7 +3,7 @@
 # Makefile for the FUSE filesystem.
 #
 
-obj-$(CONFIG_FUSE_FS) += fuse.o
+obj-$(CONFIG_FUSE_FS) += fuse.o dev_uring.o
 obj-$(CONFIG_CUSE) += cuse.o
 obj-$(CONFIG_VIRTIO_FS) += virtiofs.o
 

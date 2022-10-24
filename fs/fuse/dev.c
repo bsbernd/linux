@@ -7,6 +7,8 @@
 */
 
 #include "fuse_i.h"
+#include "dev_uring_i.h"
+#include "fuse_dev_i.h"
 
 #include <linux/init.h>
 #include <linux/module.h>
@@ -21,20 +23,13 @@
 #include <linux/swap.h>
 #include <linux/splice.h>
 #include <linux/sched.h>
-#include <linux/io_uring.h>
 #include <linux/mm.h>
 #include <asm/io.h>
 
 MODULE_ALIAS_MISCDEV(FUSE_MINOR);
 MODULE_ALIAS("devname:fuse");
 
-/* Ordinary requests have even IDs, while interrupts IDs are odd */
-#define FUSE_INT_REQ_BIT (1ULL << 0)
-#define FUSE_REQ_ID_STEP (1ULL << 1)
-
 static struct kmem_cache *fuse_req_cachep;
-
-static int fuse_dev_uring_read(struct fuse_ring_req *ring_req);
 
 static struct fuse_dev *fuse_get_dev(struct file *file)
 {
@@ -733,10 +728,18 @@ struct fuse_copy_state {
 	unsigned offset;
 	unsigned move_pages:1, is_uring:1;
 	struct {
-		struct fuse_ring_data_seg *seg;
-		size_t buf_len; /* available buf size for a data segment */
-		size_t buf_used; // XXX Remove
-		int nr_segs; /* number of data segments */
+		/* pointer into the ring buffer */
+		struct fuse_uring_buf_req *buf_req;
+		int err;
+
+		struct {
+			char *buf;
+			struct fuse_ring_seg_extents *extents;
+			int max_segs;
+			int segment; /* only needed for write */
+		} curr;
+
+		size_t buf_len; /* available buf size */
 	} ring;
 };
 
@@ -750,27 +753,25 @@ static void fuse_copy_init(struct fuse_copy_state *cs, int write,
 
 /* Unmap and put previous page of userspace buffer */
 static void fuse_copy_finish(struct fuse_copy_state *cs)
-{
+{				/* for sending data from kernel also the number of segs */
+
 	if (cs->is_uring) {
-		if (!cs->write) {
-			int vec_size;
-			/* a copy from/to the ring buffer does not
-			 * want to do anything _before_ any work was done.
-			 * Using cs->ring.nr_segs allows to call this function
-			 * at anytime, without causing harm.
-			 */
-			if (cs->ring.seg[cs->ring.nr_segs].len == 0)
-				return;
+		int nr_segs;
+		if (!cs->ring.curr.buf)
+			return;
 
-			/* segments are 8 byte aligned in the ring buffers,
-			 * set the next segment */
-			vec_size = round_up(cs->ring.seg[0].len, 8);
-			cs->ring.seg = (void *)((char *)cs->ring.seg) + vec_size;
-
-			if (!cs->write)
-				cs->ring.nr_segs++;
-			cs->offset = 0;
+		if (!cs->ring.curr.extents) {
+			WARN(1, "Impossible cs state");
+			cs->ring.err = -EIO;
+			return;
 		}
+
+		nr_segs = cs->ring.curr.extents->nr_segs;
+		cs->ring.curr.extents->seg_len[nr_segs] = cs->offset;
+
+		cs->ring.curr.buf = NULL;
+		cs->offset = 0;
+		cs->len = 0;
 	} else if (cs->currbuf) {
 		struct pipe_buffer *buf = cs->currbuf;
 
@@ -836,9 +837,54 @@ static int fuse_copy_fill(struct fuse_copy_state *cs)
 			cs->nr_segs++;
 		}
 	} else if (cs->is_uring) {
-		if (!cs->ring.buf_len)
-			return -ENOSPC; /* no space left in the ring buffer */
-		cs->len = cs->ring.buf_len;
+		struct fuse_ring_data_seg *seg;
+		int off;
+		int nr_segs;
+
+		if (!cs->ring.buf_len) {
+			/* no space left in the ring buffer */
+			return -ENOSPC;
+		}
+
+		if (!cs->ring.curr.extents) {
+			cs->ring.curr.extents =
+				&cs->ring.buf_req->extents;
+
+			cs->ring.curr.max_segs =
+				FUSE_RING_BUF_HEADER_MAX_SEGS;
+		}
+
+		nr_segs = cs->ring.curr.extents->nr_segs;
+		if (nr_segs >= cs->ring.curr.max_segs) {
+			/* FIXME: Switch to the next array
+			 *        and set entries that fit into one page.
+			 */
+			return -ENOSPC;
+		}
+
+		if (nr_segs == 0)
+			off = 0;
+		else
+			off = cs->ring.curr.extents->seg_len[nr_segs];
+
+		cs->ring.curr.buf = cs->ring.buf_req->data + off;
+
+		/* only needed for write, for reads just for state verification */
+		cs->ring.curr.segment++;
+		nr_segs++;
+		if (!cs->write) {
+			cs->ring.curr.extents->nr_segs++;
+
+			if (cs->ring.curr.segment !=
+			    cs->ring.curr.extents->nr_segs) {
+				WARN(1, "nr_segs mismatch %d vs %d\n",
+				     cs->ring.curr.segment,
+				     cs->ring.curr.extents->nr_segs);
+			}
+
+			cs->len = cs->ring.buf_len;
+		} else
+			cs->len = cs->ring.curr.extents->seg_len[nr_segs];
 	} else {
 		size_t off;
 		err = iov_iter_get_pages2(cs->iter, &page, PAGE_SIZE, 1, &off);
@@ -859,31 +905,26 @@ static int fuse_copy_do_ring(struct fuse_copy_state *cs, void **val,
 			     unsigned *size)
 {
 	unsigned ncpy = min(*size, cs->len);
-	char *vec_buf = cs->ring.seg->buf + cs->offset;
+	char *buf = cs->ring.curr.buf + cs->offset;
 
 	pr_debug("%s: write=%d buf=%p *val=%p size=%u len=%u offset=%u npy=%u",
-		 __func__, cs->write, cs->ring.seg->buf, val, *size, cs->len,
+		 __func__, cs->write, buf, val, *size, cs->len,
 		 cs->offset, ncpy);
 
 	if (val) {
 		if (cs->write) {
 			cs->ring.buf_len += ncpy;
-			memcpy(vec_buf, *val, ncpy);
+			memcpy(buf, *val, ncpy);
 		}
 		else
-			memcpy(*val, cs->ring.seg, ncpy);
+			memcpy(*val, buf, ncpy);
 	}
 	*val += ncpy;
 	*size -= ncpy;
 	cs->len -= ncpy;
-	cs->ring.buf_len -= ncpy;
 	cs->offset += ncpy;
 
-	// XXX REMOVE
-	cs->ring.buf_used += ncpy;
-
 	return ncpy;
-
 }
 
 /* Do as much copy to/from userspace buffer as we can */
@@ -1149,7 +1190,7 @@ static int fuse_copy_one(struct fuse_copy_state *cs, void *val, unsigned size)
 	while (size) {
 		if (!cs->len) {
 			int err = fuse_copy_fill(cs);
-			pr_debug("%s:%d err=%d",
+			pr_debug("%s:%d fill err=%d",
 				 __func__, __LINE__, err);
 			if (err)
 				return err;
@@ -1175,7 +1216,6 @@ static int fuse_copy_args(struct fuse_copy_state *cs, unsigned numargs,
 			err = fuse_copy_pages(cs, arg->size, zeroing);
 		}
 		else {
-			pr_debug("copy one ring-buf=%p", cs->ring.seg);
 			err = fuse_copy_one(cs, arg->value, arg->size);
 		}
 	}
@@ -1591,95 +1631,6 @@ static int fuse_notify_poll(struct fuse_conn *fc, unsigned int size,
 
 err:
 	fuse_copy_finish(cs);
-	return err;
-}
-
-/**
- * This functions is called _read_ to have it in sync with similar
- * functions that use posix read()/write() IO to /dev/fuse. In the application
- * write path these fuse userspace _reads: data from /dev/fuse. With uring
- * this is a bit confusing, as there is no read involved here.
- */
-static int fuse_dev_uring_read_copy_args(struct fuse_ring_req *ring_req,
-					 struct fuse_uring_buf_req *buf_req)
-{
-	struct fuse_conn *fc = ring_req->fc;
-	struct fuse_req *req = &ring_req->req;
-	struct fuse_args *args = req->args;
-	struct fuse_copy_state cs;
-	int err;
-	int buf_sz = fc->ring.ring_req_size - FUSE_RING_HEADER_BUF_SIZE;
-
-	fuse_copy_init(&cs, 1, NULL);
-	cs.is_uring = 1;
-	cs.ring.seg = buf_req->data_seg;
-	cs.ring.buf_len = buf_sz;
-
-	pr_debug("%s:%d Here buf=%p buf-sz=%d\n",
-		 __func__, __LINE__, cs.ring.seg, buf_sz);
-
-	err = fuse_copy_args(&cs, args->in_numargs, args->in_pages,
-			     (struct fuse_arg *) args->in_args, 0);
-	fuse_copy_finish(&cs);
-
-	if (cs.ring.nr_segs > 1) {
-		/* do_write_buf() in libfuse does not support more than
-		 * one segment.
-		 * XXX Update libfuse before final uring support and add
-		 *     a uring specific handler? Or support with new feature
-		 *     flag later on?
-		 */
-		return -EINVAL;
-	}
-
-	buf_req->nr_data_segs = cs.ring.nr_segs;
-
-	buf_req->buf_size_used = cs.ring.buf_used;
-
-	return err;
-}
-
-static int fuse_dev_uring_read(struct fuse_ring_req *ring_req)
-{
-	struct fuse_uring_buf_req *buf_req = ring_req->kbuf;
-	struct fuse_req *req = &ring_req->req;
-	int err = -EIO;
-
-	pr_debug("%s:%d Here ring-req=%p buf_req=%p state=%d args=%p \n",
-		 __func__, __LINE__, ring_req, buf_req, ring_req->state, req->args);
-
-	if (READ_ONCE(ring_req->state) != FUSE_RING_REQ_STATE_REQ) {
-		WARN_RATELIMIT(1, "Invalid ring-req state: %d\n",
-				ring_req->state);
-		goto err;
-	}
-
-	err = fuse_dev_uring_read_copy_args(ring_req, buf_req);
-	if (err) {
-		pr_debug("read_copy failed: %d\n", err);
-		goto err;
-	}
-
-	pr_debug("%s:%d Here\n", __func__, __LINE__);
-
-	/* ring req go directly into the shared memory buffer
-	 *
-	 * XXX avoid this have the data for uring immediately in the
-	 * shared userspace buffer. Lots of if-conditions in the code,
-	 * though */
-	buf_req->in = req->in.h;
-
-	pr_debug("%s cmd-done op=%d unique=%llu\n",
-		__func__, buf_req->in.opcode, buf_req->in.unique);
-
-	WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_USERSPACE);
-	io_uring_cmd_done(ring_req->cmd, 0, 0);
-
-	return 0;
-
-err:
-	req->out.h.error = -EIO;
-	fuse_request_end(req);
 	return err;
 }
 
@@ -2358,45 +2309,6 @@ static void end_polls(struct fuse_conn *fc)
 	}
 }
 
-/**
- * XXX So far only happens on umount, but we need it on daemon exit.
- *     Create a waiting ioctl thread, which does this on exit?
- */
-static void fuse_destroy_uring(struct fuse_conn *fc)
-{
-
-	spin_lock(&fc->ring.lock);
-	if (fc->ring.queues) {
-		int q_id, tag, state;
-		struct fuse_ring_req *req;
-		struct fuse_ring_queue *queue;
-
-		for (q_id = 0; q_id < fc->ring.nr_queues; q_id++) {
-			queue = &fc->ring.queues[q_id];
-			for (tag = 0; tag < fc->ring.queue_depth; tag++) {
-				req = &queue->ring_req[tag];
-				state = READ_ONCE(req->state);
-				pr_debug("qid=%d tag=%d state=%d\n",
-					 q_id, tag, state);
-
-				if (state == FUSE_RING_REQ_STATE_WAITING) {
-					/* error code should not matter,
-					 * but better a code so that userspace
-					 * would abort if somehow still alive
-					 */
-					pr_debug("releasing cmd qid=%d tag=%d\n",
-						 q_id, tag);
-					io_uring_cmd_done(req->cmd, -EIO, 0);
-				}
-			}
-		}
-
-		kfree(fc->ring.queues);
-		fc->ring.queues = NULL;
-	}
-	spin_unlock(&fc->ring.lock);
-}
-
 /*
  * Abort all requests.
  *
@@ -2551,86 +2463,6 @@ static int fuse_device_clone(struct fuse_conn *fc, struct file *new)
 	return 0;
 }
 
-static int fuse_dev_alloc_uring_req_mem(struct fuse_ring_req *req, int size)
-{
-	const int flags = GFP_KERNEL_ACCOUNT | __GFP_ZERO | __GFP_NOWARN | __GFP_COMP;
-	req->kbuf = (void *)__get_free_pages(flags, get_order(size));
-
-	return req->kbuf ? 0 : -ENOMEM;
-}
-
-static int fuse_dev_setup_uring(struct file *file, struct fuse_uring_cfg *cfg)
-{
-	struct fuse_dev *fud = fuse_get_dev(file);
-	struct fuse_conn *fc;
-	size_t req_size;
-	size_t queue_size;
-	int q_id;
-
-	if (fud == NULL)
-		return -ENODEV;
-
-	pr_debug("%s flags=%llx nq=%d  per-core=%d qdepth=%d\n",
-		 __func__, cfg->compat_flags, cfg->num_queues, cfg->per_core_queue,
-		 cfg->queue_depth);
-
-	fc = fud->fc;
-
-	if (cfg->per_core_queue) {
-		if (!cpu_possible(cfg->num_queues - 1)) {
-			pr_info("per-core-queue, but number of queue "
-				"mismatches number of cpus");
-			return -EINVAL;
-		}
-	} else {
-		if (cfg->num_queues != 1) {
-			pr_info("Per-core-queue not set, expecting a single "
-				"queue");
-			return -EINVAL;
-		}
-	}
-
-	if (cfg->mmap_req_size < FUSE_RING_HEADER_BUF_SIZE + PAGE_SIZE) {
-		pr_info("Per req mmap size too small (%d), min: %ld\n",
-			cfg->mmap_req_size,
-			FUSE_RING_HEADER_BUF_SIZE + PAGE_SIZE);
-		return -EINVAL;
-	}
-
-	req_size = cfg->queue_depth * sizeof(struct fuse_ring_req);
-	queue_size = (sizeof(*fc->ring.queues) + req_size) * cfg->num_queues;
-
-	fc->ring.nr_queues = cfg->num_queues;
-	fc->ring.queue_depth = cfg->queue_depth;
-	fc->ring.per_core_queue = cfg->per_core_queue;
-	fc->ring.ring_req_size = cfg->mmap_req_size;
-	fc->ring.queues = kcalloc(cfg->num_queues, queue_size, GFP_KERNEL);
-	for (q_id = 0; q_id < cfg->num_queues; q_id++) {
-		int tag, rc;
-		struct fuse_ring_queue *queue = &fc->ring.queues[q_id];
-		queue->q_id = q_id;
-		queue->fc = fc;
-		atomic_set(&queue->req_cnt, -1);
-
-		for (tag = 0; tag < fc->ring.queue_depth; tag++) {
-			struct fuse_ring_req *req = &queue->ring_req[tag];
-			req->fc = fc;
-			req->tag = tag;
-
-			pr_debug("initialize qid=%d tag=%d queue=%p req=%p",
-				 q_id, tag, queue, req);
-
-			rc = fuse_dev_alloc_uring_req_mem(req, cfg->mmap_req_size);
-			if (rc != 0)
-				return rc; /* XXX free all memory */
-
-			WRITE_ONCE(req->state, FUSE_RING_REQ_STATE_INIT);
-		}
-	}
-
-	return 0;
-}
-
 static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 			   unsigned long arg)
 {
@@ -2679,325 +2511,6 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 		break;
 	}
 	return res;
-}
-
-/**
- *
- * @return 1 if there is an error, 0 otherise
- */
-static int fuse_dev_uring_write_is_err(struct fuse_conn *fc,
-				       struct fuse_ring_req *ring_req)
-{
-	struct fuse_uring_buf_req *buf_req = ring_req->kbuf;
-	struct fuse_req *req = &ring_req->req;
-	struct fuse_out_header *oh = &buf_req->out;
-	int err;
-
-	if (oh->unique == 0) {
-		/* Not supportd through request based uring, this needs another
-		 * ring from user space to kernel
-		 */
-		pr_warn("Unsupported fuse-notify\n");
-		err = -EINVAL;
-		goto err;
-	}
-
-	if (buf_req->result < 0) {
-		err = buf_req->result;
-		goto err;
-	}
-
-	if (oh->error <= -512 || oh->error > 0) {
-		err = -EINVAL;
-		goto err;
-	}
-
-	if (oh->error) {
-		err = oh->error;
-		goto err;
-	}
-
-	if ((oh->unique & ~FUSE_INT_REQ_BIT) != req->in.h.unique) {
-
-		pr_warn("Unpexted seqno mismatch, expected: %llu got %llu\n",
-			req->in.h.unique, oh->unique & ~FUSE_INT_REQ_BIT);
-		err = -ENOENT;
-		goto err;
-	}
-
-	/* Is it an interrupt reply ID?
-	 * XXX: Verifiy if right
-	 */
-	if (oh->unique & FUSE_INT_REQ_BIT) {
-		err = 0;
-		if (oh->error == -ENOSYS)
-			fc->no_interrupt = 1;
-		else if (oh->error == -EAGAIN) {
-			/* XXX Needs to copy to the next cq and submit it */
-			// err = queue_interrupt(req);
-			pr_warn("Intrerupt EAGAIN not supported yet");
-			err = -EINVAL;
-		}
-
-		goto err;
-	}
-
-	return 0;
-
-err:
-	ring_req->req.out.h.error = err;
-	return 1;
-
-}
-
-static void fuse_dev_uring_write(struct fuse_dev *fud,
-				 struct fuse_ring_req *ring_req)
-{
-	struct fuse_uring_buf_req *buf_req = ring_req->kbuf;
-	struct fuse_req *req = &ring_req->req;
-	struct fuse_copy_state cs;
-	ssize_t err;
-
-	pr_debug("%s:%d Importing iovec\n", __func__, __LINE__);
-
-	if (fuse_dev_uring_write_is_err(fud->fc, ring_req)) {
-		fuse_request_end(&ring_req->req);
-	}
-
-	fuse_copy_init(&cs, 0, NULL);
-	cs.is_uring = true;
-	cs.is_uring = 1;
-
-	/* XXX FIXME NOW */
-	cs.ring.seg = buf_req->data_seg;
-	cs.ring.buf_len = buf_req->buf_size_used;
-	cs.ring.nr_segs = buf_req->nr_data_segs;
-
-	pr_debug("%s:%d Here buf=%p buf-sz=%zu\n",
-		 __func__, __LINE__, cs.ring.seg[0].buf, cs.ring.buf_len);
-
-	err = copy_out_args(&cs, req->args, buf_req->buf_size_used);
-	fuse_copy_finish(&cs);
-
-	pr_debug("%s:%d ret=%zd", __func__, __LINE__, err);
-}
-
-/**
- * Check if an application command was queued into the list-queue
- *
- * @return 1 if a reqesust was taken from the queue, 0 if the queue was empty
- * the request is send to userspace then, negative values on error
- *
- * negative values for error
- */
-int fuse_dev_uring_fetch_queued(struct fuse_conn *fc,
-				struct fuse_ring_req *ring_req)
-{
-	struct fuse_iqueue *fiq = &fc->iq;
-	struct fuse_req *q_req;
-	int rc, ret = 0;
-
-	WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_REQ);
-
-	spin_lock(&fiq->lock);
-	if (!list_empty(&fiq->pending)) {
-		ret = 1;
-		q_req = list_entry(fiq->pending.next, struct fuse_req, list);
-		clear_bit(FR_PENDING, &q_req->flags);
-		list_del_init(&q_req->list);
-	}
-	spin_unlock(&fiq->lock);
-	if (ret == 0)
-		goto out;
-
-	/* copy over and release the list-queued object */
-	ring_req->req = *q_req;
-	fuse_put_request(q_req);
-
-	pr_debug("%s: args=%p ring-args=%p\n",
-		 __func__, q_req->args, ring_req->req.args);
-
-	rc = fuse_dev_uring_read(ring_req);
-	if (rc) {
-		if (unlikely(rc == -ENOENT)) {
-			/* ENOENT is specially treated by the caller,
-			 * as no reqest in the list, so must not be used here */
-			rc = -EIO;
-		}
-
-		if (rc > 0) {
-			WARN(1, "Unexpected return code: %d", rc);
-			rc = -EIO;
-		}
-
-		ret = rc;
-	}
-out:
-	return ret;
-}
-
-static int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags)
-{
-	const struct fuse_uring_cmd_req *cmd_req =
-		(struct fuse_uring_cmd_req *)cmd->cmd;
-	struct fuse_dev *fud = fuse_get_dev(cmd->file);
-	struct fuse_conn *fc = fud->fc;
-	struct fuse_ring_queue *queue;
-	struct fuse_ring_req *ring_req;
-	u32 cmd_op = cmd->cmd_op;
-	int ret = -EINVAL;
-
-	if (!(issue_flags & IO_URING_F_SQE128)) {
-		pr_info("qid=%d tag=%d SQE128 not set\n",
-			cmd_req->q_id, cmd_req->tag);
-		goto out;
-	}
-
-	if (cmd_req->q_id >= fc->ring.nr_queues) {
-		pr_info("qid=%u > nr-queues=%zu\n",
-			cmd_req->q_id, fc->ring.nr_queues);
-		goto out;
-	}
-	queue = &fc->ring.queues[cmd_req->q_id];
-
-	if (cmd_req->tag > fc->ring.queue_depth) {
-		pr_info("tag=%u > queue-depth=%zu\n",
-			cmd_req->tag, fc->ring.queue_depth);
-		goto out;
-	}
-	ring_req = &queue->ring_req[cmd_req->tag];
-
-	pr_info("%s: received: cmd op %d queue %d (%p) tag %d  (%p) result %d\n",
-		 __func__, cmd_op, cmd_req->q_id, queue, cmd_req->tag, ring_req,
-		 cmd_req->result);
-
-	switch (cmd_op) {
-	case FUSE_URING_REQ_FETCH:
-
-		if (READ_ONCE(ring_req->state) != FUSE_RING_REQ_STATE_INIT) {
-			pr_debug("%s: q_id: %d tag: %d invalid req state: %d\n",
-				 __func__, cmd_req->q_id, cmd_req->tag,
-				 ring_req->state);
-			goto out;
-		}
-
-		ring_req->cmd = cmd;
-
-		break;
-
-	case FUSE_URING_REQ_COMMIT_AND_FETCH:
-		/* user space forgot to send the buffer - invalid command */
-		if (!cmd_req->req_buf) {
-			goto out;
-		}
-		if (ring_req->state != FUSE_RING_REQ_STATE_USERSPACE) {
-			pr_info("Invalid request state %d, expected %d \n",
-				ring_req->state, FUSE_RING_REQ_STATE_USERSPACE);
-			goto out;
-		}
-		ring_req->cmd = cmd;
-		WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_COMMIT);
-
-		fuse_dev_uring_write(fud, ring_req);
-
-		break;
-	default:
-		pr_debug("Unknown uring command %d", cmd_op);
-		goto out;
-	}
-
-	ret = fuse_dev_uring_fetch_queued(fc, ring_req);
-
-	pr_debug("%s:%d ret=%d", __func__, __LINE__, ret);
-
-	if (ret < 0)
-		goto out;
-
-	if (ret == 0)
-		WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_WAITING);
-
-	pr_info("%s: %s cmd op %d queue %d tag %d result %d\n",
-		 __func__, ret == 0 ? "req ring queued" : "req sent back",
-		cmd_op, cmd_req->q_id, cmd_req->tag, ret);
-
-	return -EIOCBQUEUED;
-
-out:
-	WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_USERSPACE);
-	io_uring_cmd_done(cmd, ret, 0);
-	pr_info("%s: req err: op=%d, tag=%d ret=%d io_flags=%x\n",
-		 __func__, cmd_op, cmd_req->tag, ret, issue_flags);
-	return -EIOCBQUEUED;
-}
-
-#if 0
-static int fuse_dev_mmap(struct file *file, struct vm_area_struct *vma)
-{
-	unsigned long len = vma->vm_end - vma->vm_start;
-	void *bufp;
-	unsigned int off;
-	int err;
-	const int flags = GFP_KERNEL | __GFP_COMP |__GFP_ZERO;
-
-	bufp = (void *)__get_free_pages(flags, get_order(len));
-	if (!bufp)
-		return -ENOMEM;
-
-	for (off = 0; off < len; off += PAGE_SIZE) {
-		struct page *page = virt_to_page(bufp + off);
-
-		err = vm_insert_page(vma, vma->vm_start + off, page);
-		if (err)
-			return err;
-	}
-
-	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
-
-	return 0;
-}
-#endif
-
-
-/**
- * This is mmap for userspace uring
- */
-static int fuse_dev_ring_mmap(struct file *filp, struct vm_area_struct *vma)
-{
-	struct fuse_dev *fud = fuse_get_dev(filp);
-	struct fuse_conn *fc = fud->fc;
-	size_t sz = vma->vm_end - vma->vm_start;
-	phys_addr_t pfn;
-	int qid, tag, ret = 0;
-	loff_t off;
-	struct fuse_ring_queue *queue;
-	struct fuse_ring_req *req;
-
-	 /* check if uring is configured and if the requested size matches */
-	if (fc->ring.nr_queues == 0 || fc->ring.queue_depth == 0 ||
-	    sz != fc->ring.ring_req_size) {
-		ret = -EINVAL;
-		goto out;
-	}
-
-	/* offset actually has the specifies which ring request the mmap is for */
-	off = vma->vm_pgoff << PAGE_SHIFT;
-	qid = off / fc->ring.nr_queues;
-	tag = off % fc->ring.queue_depth;
-
-	if (qid > fc->ring.nr_queues)
-		return -EINVAL;
-
-	queue = &fc->ring.queues[qid];
-	req = &queue->ring_req[tag];
-
-	pfn = virt_to_phys(req->kbuf) >> PAGE_SHIFT;
-	ret = remap_pfn_range(vma, vma->vm_start, pfn, sz, vma->vm_page_prot);
-
-out:
-	pr_debug("%s: pid %d addr %lx sz %zu qid: %d tag: %d ret %d\n",
-		 __func__, current->pid, vma->vm_start, sz, qid, tag, ret);
-
-	return ret;
 }
 
 const struct file_operations fuse_dev_operations = {
