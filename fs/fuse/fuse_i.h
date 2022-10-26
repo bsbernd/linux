@@ -538,8 +538,17 @@ enum fuse_ring_req_state {
 };
 
 struct fuse_ring_req {
+	/* pointer to kernel request buffer, userspace side has mmaped
+	 * this */
+	struct fuse_uring_buf_req *kbuf;
+
+	int tag;
+
+	/* back pointer */
+	struct fuse_conn *fc;
+
 	/* set from uring sqe */
-	struct fuse_uring_buf_req *addr_ptr;
+	struct fuse_uring_buf_req *user_ptr;
 	size_t addr_len;
 
 	/* XXX CAS all states */
@@ -883,10 +892,9 @@ struct fuse_conn {
 		unsigned int max_io_sz;
 		size_t nr_queues;
 		size_t queue_depth;
+		size_t ring_req_size;
 		struct fuse_ring_queue *queues;
 		int per_core_queue:1;
-
-		struct mm_struct *mm;
 	} ring;
 };
 
