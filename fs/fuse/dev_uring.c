@@ -27,64 +27,117 @@
 #include <asm/io.h>
 #include <linux/io_uring.h>
 
-
-
-static int fuse_dev_uring_read(struct fuse_ring_req *ring_req);
-
-/**
- * This functions is called _read_ to have it in sync with similar
- * functions that use posix read()/write() IO to /dev/fuse. In the application
- * write path these fuse userspace _reads: data from /dev/fuse. With uring
- * this is a bit confusing, as there is no read involved here.
- */
-static int fuse_dev_read_uring_copy_args(struct fuse_ring_req *ring_req,
-					 struct fuse_uring_buf_req *buf_req)
+static int fuse_uring_copy_to_ring(struct fuse_uring_buf_req *buf_req,
+				   unsigned numargs,  struct fuse_arg *args,
+				   unsigned argpages)
 {
-	struct fuse_conn *fc = ring_req->fc;
-	struct fuse_req *req = &ring_req->req;
-	struct fuse_args *args = req->args;
-	struct fuse_copy_state cs;
-	int err;
-	int buf_sz = fc->ring.ring_req_size - FUSE_RING_HEADER_BUF_SIZE;
+	int idx;
+	int off = 0;
 
-	fuse_copy_init(&cs, 1, NULL);
-	cs.is_uring = 1;
-	cs.ring.data_seg_ptr = buf_req->data_seg;
-	cs.ring.buf_len = buf_sz;
-
-	pr_debug("%s:%d Here buf=%p buf-sz=%d\n",
-		 __func__, __LINE__, cs.ring.data_seg_ptr[0].buf, buf_sz);
-
-	err = fuse_copy_args(&cs, args->in_numargs, args->in_pages,
-			     (struct fuse_arg *) args->in_args, 0);
-	fuse_copy_finish(&cs);
-
-	if (cs.ring.read.nr_seg > 1) {
-		/* do_write_buf() in libfuse does not support more than
-		 * one segment.
-		 * XXX Update libfuse before final uring support and add
-		 *     a uring specific handler? Or support with new feature
-		 *     flag later on?
-		 */
-		return -EINVAL;
+	if (argpages) {
+		pr_debug("FIXME, argpages set\n");
+		dump_stack();
+		return -EIO; /* FIXME, add support */
 	}
 
+	for (idx = 0; idx < numargs; idx++) {
+		struct fuse_arg *arg = &args[idx];
+		int len = arg->size;
+		char *ring_buf = buf_req->in_out_arg + off;
 
-	buf_req->nr_data_segs = cs.ring.read.nr_seg;
-	buf_req->buf_size_used = cs.ring.read.buf_used;
+		if (off + len > sizeof(buf_req->in_out_arg)) {
+			pr_info("off=%d + len=%d > max-buf-sz=%zu\n",
+				off, len, sizeof(buf_req->in_out_arg));
+			return -ENOSPC;
+		}
 
-	pr_debug("%s:%d nr-segs=%d seg[0].len=%llu buf-used=%d \n",
-		 __func__, __LINE__, buf_req->nr_data_segs,
-		 buf_req->data_seg[0].len, buf_req->buf_size_used);
+		memcpy(ring_buf, arg->value, len);
 
-	return err;
+		off += len;
+	}
+
+	buf_req->in_out_arg_len = off;
+
+	return 0;
 }
 
+#if 0
+static int fuse_uring_copy_from_ring(struct fuse_uring_buf_req *buf_req,
+				     unsigned numargs, struct fuse_arg *args,
+				     unsigned argpages)
+{
+	int idx;
+	int off = 0;
+
+	if (argpages) {
+		pr_debug("FIXME, argpages set\n");
+		dump_stack();
+		return -EIO; /* FIXME, add support */
+	}
+
+	for (idx = 0; idx < numargs; idx++) {
+		struct fuse_arg *arg = &args[idx];
+		int len;
+		char *ring_buf = buf_req->in_out_arg + off;
+
+		int ring_len = buf_req->in_out_arg_len - off;
+
+		if (unlikely(ring_len < 0)) {
+			/* This would be a bug in the code - more data copied
+			 * than available
+			 */
+			WARN_ONCE(1, "Invalid number of data copied\n");
+			return -EIO;
+		}
+
+		if (ring_len == 0) {
+			pr_debug("Insufficient number of data for arg-idx=%d\n",
+				 idx);
+			return -EINVAL;
+		}
+
+		len = min(arg->size, (unsigned)ring_len);
+
+		if (off + len > sizeof(buf_req->in_out_arg)) {
+			pr_debug("off=%d + len=%d > max-buf-sz=%zu\n",
+				off, len, sizeof(buf_req->in_out_arg));
+			return -EINVAL;
+		}
+
+		memcpy(arg->value, ring_buf, len);
+
+		off += len;
+
+		pr_debug(":%s Copied arg=%d len=%d\n", __func__, idx, len);
+	}
+
+	return 0;
+}
+#endif
+
+static int fuse_uring_copy_from_ring(struct fuse_req *req,
+				     struct fuse_uring_buf_req *buf_req)
+{
+	struct fuse_copy_state cs;
+	struct fuse_args *args = req->args;
+
+	fuse_copy_init(&cs, 0, NULL);
+	cs.is_uring = 1;
+	cs.ring.buf = buf_req->in_out_arg;
+	cs.ring.len = buf_req->in_out_arg_len;
+	cs.req = req;
+
+	pr_debug("%s:%d buf=%p len=%d args=%d\n", __func__, __LINE__,
+		 cs.ring.buf, cs.ring.len, args->out_numargs);
+
+	return copy_out_args(&cs, args, buf_req->in_out_arg_len);
+}
 
 int fuse_dev_uring_read(struct fuse_ring_req *ring_req)
 {
 	struct fuse_uring_buf_req *buf_req = ring_req->kbuf;
 	struct fuse_req *req = &ring_req->req;
+	struct fuse_args *args = req->args;
 	int err = -EIO;
 
 	pr_debug("%s:%d Here ring-req=%p buf_req=%p state=%d args=%p \n",
@@ -96,13 +149,11 @@ int fuse_dev_uring_read(struct fuse_ring_req *ring_req)
 		goto err;
 	}
 
-	err = fuse_dev_read_uring_copy_args(ring_req, buf_req);
-	if (err) {
-		pr_debug("read_copy failed: %d\n", err);
+	err = fuse_uring_copy_to_ring(buf_req, args->in_numargs,
+				      (struct fuse_arg *)args->in_args,
+				      args->in_pages);
+	if (err)
 		goto err;
-	}
-
-	pr_debug("%s:%d Here\n", __func__, __LINE__);
 
 	/* ring req go directly into the shared memory buffer
 	 *
@@ -124,6 +175,7 @@ err:
 	fuse_request_end(req);
 	return err;
 }
+EXPORT_SYMBOL_GPL(fuse_dev_uring_read);
 
 /**
  *
@@ -143,11 +195,6 @@ static int fuse_dev_uring_write_is_err(struct fuse_conn *fc,
 		 */
 		pr_warn("Unsupported fuse-notify\n");
 		err = -EINVAL;
-		goto err;
-	}
-
-	if (buf_req->result < 0) {
-		err = buf_req->result;
 		goto err;
 	}
 
@@ -198,40 +245,37 @@ void fuse_dev_uring_write(struct fuse_dev *fud,
 {
 	struct fuse_uring_buf_req *buf_req = ring_req->kbuf;
 	struct fuse_req *req = &ring_req->req;
-	struct fuse_copy_state cs;
-	ssize_t err;
+	ssize_t err = 0;
 
-	pr_debug("%s:%d\n", __func__, __LINE__);
+	pr_debug("%s:%d req=%p\n", __func__, __LINE__, req);
 
-	if (fuse_dev_uring_write_is_err(fud->fc, ring_req)) {
+	err = fuse_dev_uring_write_is_err(fud->fc, ring_req);
+	if (err) {
 		pr_debug("%s:%d Write err\n", __func__, __LINE__);
-		fuse_request_end(&ring_req->req);
+		goto err;
 	}
 
-	fuse_copy_init(&cs, 0, NULL);
-	cs.is_uring = true;
-	cs.is_uring = 1;
+	err = fuse_uring_copy_from_ring(req, buf_req);
+	if (err)
+		goto out;
 
-	/* XXX FIXME NOW */
-	cs.ring.seg = buf_req->data_seg;
-	cs.ring.buf_len = buf_req->buf_size_used;
-	cs.ring.next_seg = buf_req->nr_data_segs;
-
-	pr_debug("%s:%d Here buf=%p buf-sz=%zu\n",
-		 __func__, __LINE__, cs.ring.seg[0].buf, cs.ring.buf_len);
-
-	err = copy_out_args(&cs, req->args, buf_req->buf_size_used);
-	fuse_copy_finish(&cs);
-
-	pr_debug("%s:%d ret=%zd", __func__, __LINE__, err);
+out:
+	pr_debug("%s:%d ret=%zd req-ret=%d",
+		 __func__, __LINE__, err, req->out.h.error);
 	fuse_request_end(&ring_req->req);
+	return;
+
+err:
+	ring_req->req.out.h.error = err;
+	goto out;
 }
+EXPORT_SYMBOL_GPL(fuse_dev_uring_write);
 
 /**
  * Check if an application command was queued into the list-queue
  *
  * @return 1 if a reqesust was taken from the queue, 0 if the queue was empty
- * the request is send to userspace then, negative values on error
+ * 	   negative values on error
  *
  * negative values for error
  */
@@ -281,6 +325,52 @@ out:
 	return ret;
 }
 
+struct fuse_req *fuse_request_alloc_ring(struct fuse_mount *fm)
+{
+	struct fuse_conn *fc = fm->fc;
+	struct fuse_ring_queue *queue;
+	struct fuse_ring_req *ring_req;
+	struct fuse_req *req;
+	uint64_t req_cnt;
+	unsigned int core = 0;
+	int tag;
+
+	pr_debug("%s:%d =============== Here =================\n",
+		 __func__, __LINE__);
+
+	if (fc->ring.per_core_queue) {
+		core = task_cpu(current);
+	}
+
+	if (unlikely(core) > fc->ring.nr_queues)
+		core = 0;
+
+	queue = &fc->ring.queues[core];
+	req_cnt = atomic_inc_return(&queue->req_cnt);
+	tag = req_cnt & (fc->ring.queue_depth - 1); /* cnt % queue_depth */
+
+	ring_req = &queue->ring_req[tag];
+	req = &ring_req->req;
+	memset(req, 0, sizeof(*req));
+
+	if (READ_ONCE(ring_req->state) != FUSE_RING_REQ_STATE_WAITING) {
+		WARN_ONCE(1, "Invalid ring-req-state: %d\n",
+			  READ_ONCE(ring_req->state));
+		return NULL;
+	}
+
+	WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_REQ);
+
+	/* XXX: Add count verififacation - should be zero */
+
+	fuse_request_init(fm, req);
+
+	pr_debug("%s tag %d cnt=%llu req=%p\n", __func__, tag, req_cnt, req);
+
+	return req;
+}
+EXPORT_SYMBOL_GPL(fuse_request_alloc_ring);
+
 int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags)
 {
 	const struct fuse_uring_cmd_req *cmd_req =
@@ -312,9 +402,8 @@ int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags)
 	}
 	ring_req = &queue->ring_req[cmd_req->tag];
 
-	pr_info("%s: received: cmd op %d queue %d (%p) tag %d  (%p) result %d\n",
-		 __func__, cmd_op, cmd_req->q_id, queue, cmd_req->tag, ring_req,
-		 cmd_req->result);
+	pr_info("%s: received: cmd op %d queue %d (%p) tag %d  (%p)\n",
+		 __func__, cmd_op, cmd_req->q_id, queue, cmd_req->tag, ring_req);
 
 	switch (cmd_op) {
 	case FUSE_URING_REQ_FETCH:
@@ -374,7 +463,7 @@ out:
 		 __func__, cmd_op, cmd_req->tag, ret, issue_flags);
 	return -EIOCBQUEUED;
 }
-
+EXPORT_SYMBOL(fuse_dev_uring);
 
 
 /**
@@ -415,6 +504,7 @@ void fuse_destroy_uring(struct fuse_conn *fc)
 	}
 	spin_unlock(&fc->ring.lock);
 }
+EXPORT_SYMBOL_GPL(fuse_destroy_uring);
 
 static int fuse_dev_create_uring_req_mem(struct fuse_ring_req *req, int size)
 {
@@ -495,6 +585,7 @@ int fuse_dev_setup_uring(struct file *file, struct fuse_uring_cfg *cfg)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(fuse_dev_setup_uring);
 
 /**
  * This is mmap for userspace uring
@@ -537,5 +628,6 @@ out:
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(fuse_dev_ring_mmap);
 
 

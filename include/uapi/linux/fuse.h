@@ -1057,7 +1057,8 @@ struct fuse_secctx_header {
 /**
  * Size of the ring buffer header
  */
-#define FUSE_RING_HEADER_BUF_SIZE 4096
+#define FUSE_RING_HEADER_BUF_SIZE 8192
+#define FUSE_RING_IN_OUT_ARG_SIZE 4096
 
 enum fuse_ring_req_cmd {
 	FUSE_RING_BUF_CMD_INVALID = 0,
@@ -1078,16 +1079,13 @@ struct fuse_uring_buf_req {
 
 	union {
 		/* The first 4K are command data */
-		char in_out_buf[FUSE_RING_HEADER_BUF_SIZE];
+		char ring_header[FUSE_RING_HEADER_BUF_SIZE];
 
 		struct {
 			uint64_t flags;
 
 			/* enum fuse_ring_buf_cmd */
 			uint32_t cmd;
-
-			uint32_t result;
-			uint32_t buf_size_used;
 
 			uint32_t nr_data_segs;
 
@@ -1096,6 +1094,10 @@ struct fuse_uring_buf_req {
 				struct fuse_in_header in;
 				struct fuse_out_header out;
 			};
+
+			uint32_t padding1;
+			uint32_t in_out_arg_len;
+			char in_out_arg[4096];
 
 			/* More of these can be within data[] below - then
 			 * alwas one page
@@ -1110,14 +1112,13 @@ struct fuse_uring_buf_req {
 				/* offset to the next array */
 				uint32_t next_array_off;
 
-				uint32_t seg_len[0];
+				uint32_t seg_len[];
 			} extents;
 		};
 	};
 
 	char data[];
-} __attribute__ ((aligned(8)));
-
+};
 
 /**
  * sqe commands to the kernel
@@ -1142,14 +1143,10 @@ struct fuse_uring_cmd_req {
 	/* queue entry (array index) */
 	uint16_t tag;
 
-	/* Submit the userspace result for the fuse request */
-	uint32_t result;
+	uint32_t req_buf_len;
 
 	/* pointer to struct fuse_uring_buf_req */
 	uint64_t req_buf;
-	uint32_t req_buf_len;
-
-	uint32_t padding;
 };
 
 #endif /* _LINUX_FUSE_H */
