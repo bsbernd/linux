@@ -165,6 +165,9 @@ int fuse_dev_uring_read(struct fuse_ring_req *ring_req)
 	pr_debug("%s cmd-done op=%d unique=%llu\n",
 		__func__, buf_req->in.opcode, buf_req->in.unique);
 
+	clear_bit(FR_PENDING, &req->flags);
+	set_bit(FR_SENT, &req->flags);
+
 	WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_USERSPACE);
 	io_uring_cmd_done(ring_req->cmd, 0, 0);
 
