@@ -1057,7 +1057,7 @@ struct fuse_secctx_header {
 /**
  * Size of the ring buffer header
  */
-#define FUSE_RING_HEADER_BUF_SIZE 8192
+#define FUSE_RING_HEADER_BUF_SIZE 4096
 #define FUSE_RING_IN_OUT_ARG_SIZE 4096
 
 enum fuse_ring_req_cmd {
