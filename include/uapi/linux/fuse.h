@@ -1070,8 +1070,6 @@ enum fuse_ring_req_cmd {
 	FUSE_RING_BUF_CMD_ERROR = 2,
 };
 
-#define FUSE_RING_BUF_HEADER_MAX_SEGS 8
-
 /**
  * This structure mapped onto the
  */
@@ -1096,9 +1094,6 @@ struct fuse_uring_buf_req {
 			};
 		};
 	};
-
-	uint64_t mem_len;
-	void *mem_ptr;
 
 	char in_out_arg[FUSE_RING_IN_OUT_ARG_SIZE];
 	char data[];
