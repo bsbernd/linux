@@ -165,6 +165,9 @@ int fuse_dev_uring_read(struct fuse_ring_req *ring_req)
 	pr_debug("%s cmd-done op=%d unique=%llu\n",
 		__func__, buf_req->in.opcode, buf_req->in.unique);
 
+	clear_bit(FR_PENDING, &req->flags);
+	set_bit(FR_SENT, &req->flags);
+
 	WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_USERSPACE);
 	io_uring_cmd_done(ring_req->cmd, 0, 0);
 
@@ -178,15 +181,13 @@ err:
 EXPORT_SYMBOL_GPL(fuse_dev_uring_read);
 
 /**
- *
- * @return 1 if there is an error, 0 otherise
+ * Checks for errors and stores it into the request
  */
 static int fuse_dev_uring_write_is_err(struct fuse_conn *fc,
 				       struct fuse_ring_req *ring_req)
 {
-	struct fuse_uring_buf_req *buf_req = ring_req->kbuf;
 	struct fuse_req *req = &ring_req->req;
-	struct fuse_out_header *oh = &buf_req->out;
+	struct fuse_out_header *oh = &req->out.h;
 	int err;
 
 	if (oh->unique == 0) {
@@ -195,17 +196,20 @@ static int fuse_dev_uring_write_is_err(struct fuse_conn *fc,
 		 */
 		pr_warn("Unsupported fuse-notify\n");
 		err = -EINVAL;
-		goto err;
+		goto seterr;
 	}
 
 	if (oh->error <= -512 || oh->error > 0) {
 		err = -EINVAL;
-		goto err;
+		goto seterr;
 	}
 
 	if (oh->error) {
 		err = oh->error;
-		goto err;
+		pr_debug("%s:%d err=%d op=%d req-ret=%d",
+			 __func__, __LINE__, err, req->args->opcode,
+			 req->out.h.error);
+		goto err; /* error already set */
 	}
 
 	if ((oh->unique & ~FUSE_INT_REQ_BIT) != req->in.h.unique) {
@@ -213,7 +217,7 @@ static int fuse_dev_uring_write_is_err(struct fuse_conn *fc,
 		pr_warn("Unpexted seqno mismatch, expected: %llu got %llu\n",
 			req->in.h.unique, oh->unique & ~FUSE_INT_REQ_BIT);
 		err = -ENOENT;
-		goto err;
+		goto seterr;
 	}
 
 	/* Is it an interrupt reply ID?
@@ -230,14 +234,21 @@ static int fuse_dev_uring_write_is_err(struct fuse_conn *fc,
 			err = -EINVAL;
 		}
 
-		goto err;
+		goto seterr;
 	}
 
 	return 0;
 
+seterr:
+	pr_debug("%s:%d err=%d op=%d req-ret=%d",
+		 __func__, __LINE__, err, req->args->opcode,
+		 req->out.h.error);
+	oh->error = err;
 err:
-	ring_req->req.out.h.error = err;
-	return 1;
+	pr_debug("%s:%d err=%d op=%d req-ret=%d",
+		 __func__, __LINE__, err, req->args->opcode,
+		 req->out.h.error);
+	return err;
 }
 
 void fuse_dev_uring_write(struct fuse_dev *fud,
@@ -249,24 +260,29 @@ void fuse_dev_uring_write(struct fuse_dev *fud,
 
 	pr_debug("%s:%d req=%p\n", __func__, __LINE__, req);
 
+	clear_bit(FR_SENT, &req->flags);
+
+	req->out.h = buf_req->out;
+
 	err = fuse_dev_uring_write_is_err(fud->fc, ring_req);
 	if (err) {
-		pr_debug("%s:%d Write err\n", __func__, __LINE__);
-		goto err;
+		pr_debug("%s:%d err=%zd oh->err=%d \n", __func__, __LINE__,
+			 err, req->out.h.error);
+		goto out;
 	}
 
 	err = fuse_uring_copy_from_ring(req, buf_req);
 	if (err)
-		goto out;
+		goto seterr;
 
 out:
-	pr_debug("%s:%d ret=%zd req-ret=%d",
-		 __func__, __LINE__, err, req->out.h.error);
+	pr_debug("%s:%d ret=%zd op=%d req-ret=%d",
+		 __func__, __LINE__, err, req->args->opcode, req->out.h.error);
 	fuse_request_end(&ring_req->req);
 	return;
 
-err:
-	ring_req->req.out.h.error = err;
+seterr:
+	req->out.h.error = err;
 	goto out;
 }
 EXPORT_SYMBOL_GPL(fuse_dev_uring_write);

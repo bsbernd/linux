@@ -658,6 +658,8 @@ static int fuse_atomic_open(struct inode *dir, struct dentry *entry,
 	if (fuse_is_bad(dir))
 		return -EIO;
 
+	pr_debug("%s:%d dentry=%p", __func__, __LINE__, entry);
+
 	if (d_in_lookup(entry)) {
 		res = fuse_lookup(dir, entry, 0);
 		if (IS_ERR(res))
@@ -667,8 +669,15 @@ static int fuse_atomic_open(struct inode *dir, struct dentry *entry,
 			entry = res;
 	}
 
+	pr_debug("%s:%d dentry=%p", __func__, __LINE__, entry);
+
+	pr_debug("%s:%d dentry=%p inode=%p",
+		 __func__, __LINE__, entry, entry->d_inode);
+
 	if (!(flags & O_CREAT) || d_really_is_positive(entry))
 		goto no_open;
+
+	pr_debug("%s:%d dentry=%p", __func__, __LINE__, entry);
 
 	/* Only creates */
 	file->f_mode |= FMODE_CREATED;
