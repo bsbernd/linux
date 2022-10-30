@@ -1057,7 +1057,7 @@ struct fuse_secctx_header {
 /**
  * Size of the ring buffer header
  */
-#define FUSE_RING_HEADER_BUF_SIZE 8192
+#define FUSE_RING_HEADER_BUF_SIZE 4096
 #define FUSE_RING_IN_OUT_ARG_SIZE 4096
 
 enum fuse_ring_req_cmd {
@@ -1087,36 +1087,20 @@ struct fuse_uring_buf_req {
 			/* enum fuse_ring_buf_cmd */
 			uint32_t cmd;
 
-			uint32_t nr_data_segs;
+			uint32_t in_out_arg_len;
 
 			/* kernel fills in, reads out */
 			union {
 				struct fuse_in_header in;
 				struct fuse_out_header out;
 			};
-
-			uint32_t padding1;
-			uint32_t in_out_arg_len;
-			char in_out_arg[4096];
-
-			/* More of these can be within data[] below - then
-			 * alwas one page
-			 * The header array holds arbitrary
-			 * FUSE_RING_INITIAL_MAX_SEGS
-			 */
-			struct fuse_ring_seg_extents {
-
-				/* number of segments within this array */
-				uint32_t nr_segs;
-
-				/* offset to the next array */
-				uint32_t next_array_off;
-
-				uint32_t seg_len[];
-			} extents;
 		};
 	};
 
+	uint64_t mem_len;
+	void *mem_ptr;
+
+	char in_out_arg[FUSE_RING_IN_OUT_ARG_SIZE];
 	char data[];
 };
 
