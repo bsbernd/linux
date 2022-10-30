@@ -1,13 +1,12 @@
 {
   "version": 5,
-  "prev": "5c6003af29a711ec23a7b8f0ff1c17375f87299c",
-  "head": "ec2d82f193050c668557878245c20996353b773d",
+  "prev": "76d885c67d69773b9735afac0c74afc000bbbfa3",
+  "head": "85acb3ce9fb6a04838d0b500c7ed187079abda4c",
   "applied": [
-    "fuse-uring-setup"
-  ],
-  "unapplied": [
+    "fuse-uring-setup",
     "fuse-dev-use-uring"
   ],
+  "unapplied": [],
   "hidden": [],
   "patches": {
     "fuse-uring-setup": {
