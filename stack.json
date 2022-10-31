@@ -1,14 +1,13 @@
 {
   "version": 5,
-  "prev": "084b812e228906825b31016ff5fcb1a655934667",
-  "head": "976043efaf3eb33f3e95f6d2307e6522f5906399",
+  "prev": "4aeb399c0ea9d5355698874850aaf6c86588de60",
+  "head": "e4758fb29f7926ef022ca15d5d0331921ce143a6",
   "applied": [
     "fuse-uring-setup",
-    "fuse-dev-use-uring"
-  ],
-  "unapplied": [
+    "fuse-dev-use-uring",
     "write-support"
   ],
+  "unapplied": [],
   "hidden": [],
   "patches": {
     "fuse-uring-setup": {
@@ -18,7 +17,7 @@
       "oid": "976043efaf3eb33f3e95f6d2307e6522f5906399"
     },
     "write-support": {
-      "oid": "7de29997ed744efe4835e752c1929e8a8ace0893"
+      "oid": "e4758fb29f7926ef022ca15d5d0331921ce143a6"
     }
   }
 }
