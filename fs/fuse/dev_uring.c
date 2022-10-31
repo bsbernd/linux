@@ -56,17 +56,22 @@ static int fuse_uring_copy_to_ring(struct fuse_conn *fc,
 	return err;
 }
 
-static int fuse_uring_copy_from_ring(struct fuse_req *req,
+static int fuse_uring_copy_from_ring(struct fuse_conn *fc,
+				     struct fuse_req *req,
 				     struct fuse_uring_buf_req *buf_req)
 {
 	struct fuse_copy_state cs;
 	struct fuse_args *args = req->args;
+	size_t max_buf = sizeof(buf_req->in_out_arg) + fc->ring.ring_req_size;
 
 	fuse_copy_init(&cs, 0, NULL);
 	cs.is_uring = 1;
 	cs.ring.buf = buf_req->in_out_arg;
 
-	/* XXX: Verify len ! */
+	if (buf_req->in_out_arg_len > max_buf) {
+		pr_debug("Max ring buffer len exceeded (%u vs %zu\n",
+			 buf_req->in_out_arg_len, max_buf);
+	}
 	cs.ring.len = buf_req->in_out_arg_len;
 	cs.req = req;
 
@@ -212,7 +217,7 @@ void fuse_dev_uring_write(struct fuse_dev *fud,
 		goto out;
 	}
 
-	err = fuse_uring_copy_from_ring(req, buf_req);
+	err = fuse_uring_copy_from_ring(fud->fc, req, buf_req);
 	if (err)
 		goto seterr;
 
