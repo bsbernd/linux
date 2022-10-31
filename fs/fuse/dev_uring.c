@@ -130,6 +130,7 @@ static int fuse_uring_copy_from_ring(struct fuse_conn *fc,
 	if (buf_req->in_out_arg_len > max_buf) {
 		pr_debug("Max ring buffer len exceeded (%u vs %zu\n",
 			 buf_req->in_out_arg_len, max_buf);
+		return -EINVAL;
 	}
 	cs.ring.len = buf_req->in_out_arg_len;
 
