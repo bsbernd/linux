@@ -56,44 +56,6 @@ static int fuse_uring_copy_to_ring(struct fuse_conn *fc,
 	return err;
 }
 
-#if 0
-static int fuse_uring_copy_to_ring(struct fuse_conn *fc,
-				   struct fuse_uring_buf_req *buf_req,
-				   unsigned numargs,  struct fuse_arg *args,
-				   unsigned argpages)
-{
-	int idx;
-	int off = 0;
-	size_t max_buf_sz = sizeof(buf_req->in_out_arg) + fc->ring.ring_req_size;
-
-	if (argpages) {
-		pr_debug("FIXME, argpages set\n");
-		dump_stack();
-		return -EIO; /* FIXME, add support */
-	}
-
-	for (idx = 0; idx < numargs; idx++) {
-		struct fuse_arg *arg = &args[idx];
-		int len = arg->size;
-		char *ring_buf = buf_req->in_out_arg + off;
-
-		if (off + len > max_buf_sz) {
-			pr_info("off=%d + len=%d > max-buf-sz=%zu\n",
-				off, len, sizeof(buf_req->in_out_arg));
-			return -ENOSPC;
-		}
-
-		memcpy(ring_buf, arg->value, len);
-
-		off += len;
-	}
-
-	buf_req->in_out_arg_len = off;
-
-	return 0;
-}
-#endif
-
 static int fuse_uring_copy_from_ring(struct fuse_req *req,
 				     struct fuse_uring_buf_req *buf_req)
 {
