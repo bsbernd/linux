@@ -1,12 +1,12 @@
 {
   "version": 5,
-  "prev": "e1abc9499d590ba3e265e69596bfd53b1d16c242",
-  "head": "ec2d82f193050c668557878245c20996353b773d",
+  "prev": "c953066878280d5518f48c2177efd7ca9b74c043",
+  "head": "179ed5a2a20ac365b017fd2295a34b878fb99579",
   "applied": [
-    "fuse-uring-setup"
+    "fuse-uring-setup",
+    "fuse-dev-use-uring"
   ],
   "unapplied": [
-    "fuse-dev-use-uring",
     "write-support"
   ],
   "hidden": [],
