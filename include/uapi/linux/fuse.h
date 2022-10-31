@@ -1094,6 +1094,10 @@ struct fuse_uring_buf_req {
 		};
 	};
 
+	/* zero copy from user to kernel, TBD */
+	uint64_t mem_len;
+	void *mem_ptr;
+
 	char in_out_arg[FUSE_RING_IN_OUT_ARG_SIZE];
 	char data[];
 };
