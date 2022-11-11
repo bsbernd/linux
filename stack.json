@@ -1,11 +1,12 @@
 {
   "version": 5,
-  "prev": "4aeb399c0ea9d5355698874850aaf6c86588de60",
-  "head": "e4758fb29f7926ef022ca15d5d0331921ce143a6",
+  "prev": "39b1ed4b0d64c9f877088c7b226bf78fc6b7b6d0",
+  "head": "5ec1acee33d62b87ff11a71ec719d7eb7c3f1fd4",
   "applied": [
     "fuse-uring-setup",
     "fuse-dev-use-uring",
-    "write-support"
+    "write-support",
+    "destrut"
   ],
   "unapplied": [],
   "hidden": [],
@@ -18,6 +19,9 @@
     },
     "write-support": {
       "oid": "e4758fb29f7926ef022ca15d5d0331921ce143a6"
+    },
+    "destrut": {
+      "oid": "5ec1acee33d62b87ff11a71ec719d7eb7c3f1fd4"
     }
   }
 }

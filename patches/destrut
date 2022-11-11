@@ -1,0 +1,8 @@
+Bottom: 13c04770f54526bb0f5a15ea93148b5ece9e07cd
+Top:    13c04770f54526bb0f5a15ea93148b5ece9e07cd
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2022-11-11 22:45:51 +0100
+
+process terminination support
+
+stop of process without hanging in uring cqe wait.
