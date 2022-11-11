@@ -950,24 +950,32 @@ struct fuse_notify_retrieve_in {
 	uint64_t	dummy4;
 };
 
-struct fuse_uring_cfg {
-	/* possible compat flags, unused for now */
-	uint64_t	compat_flags;
+/* ioctl is a configuration command */
+#define FUSE_URING_IOCTL_FLAG_CFG		1UL << 0
 
-	/* flag to have a queue per cpu core */
-	uint64_t	per_core_queue:1;
+/* wait in the kernel until the process gets terminated, to stop uring */
+#define FUSE_URING_IOCTL_FLAG_WAIT 		1UL << 1
+
+/* explicit stop of the waiting process */
+#define FUSE_URING_IOCTL_FLAG_STOP		1UL << 2
+
+/* configure one queue per core */
+#define FUSE_URING_IOCTL_FLAG_PER_CORE_QUEUE 	1UL << 3
+
+struct fuse_uring_cfg {
+	uint64_t flags;
 
 	/* number of queues */
-	uint16_t	num_queues;
+	uint16_t num_queues;
 
 	/* number of entries per queue */
-	uint16_t	queue_depth;
+	uint16_t queue_depth;
 
 	/* for all queues and their requests */
-	uint32_t	mmap_req_size;
+	uint32_t mmap_req_size;
 
 	/* reserved space for future additions */
-	uint64_t	padding2[8];
+	uint64_t padding2[8];
 };
 
 /* Device ioctls: */
@@ -975,6 +983,7 @@ struct fuse_uring_cfg {
 #define FUSE_DEV_IOC_CLONE		_IOR(FUSE_DEV_IOC_MAGIC, 0, uint32_t)
 #define FUSE_DEV_IOC_URING		_IOR(FUSE_DEV_IOC_MAGIC, 1, \
 					     struct fuse_uring_cfg)
+#define FUSE_DEV_IOC_URING_WAIT		_IO(FUSE_DEV_IOC_MAGIC, 2)
 
 struct fuse_lseek_in {
 	uint64_t	fh;
