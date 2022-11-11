@@ -894,7 +894,22 @@ struct fuse_conn {
 		size_t queue_depth;
 		size_t ring_req_size;
 		struct fuse_ring_queue *queues;
+
+		/* did the ring get initialized already ? */
+		int initialized:1;
+
+		/* one queue per core or a single queue only ? */
 		int per_core_queue:1;
+
+		/* userspace sent a stop ioctl */
+		int stop_requested:1;
+
+		/* waits for process termination or explicit stop, to
+		 * release uring recources
+		 */
+		wait_queue_head_t stop_waitq;
+
+		struct task_struct *daemon;
 	} ring;
 };
 
