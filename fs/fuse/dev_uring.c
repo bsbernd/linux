@@ -27,6 +27,9 @@
 #include <asm/io.h>
 #include <linux/io_uring.h>
 
+/* default monitor interval for a dying daemon */
+#define FURING_DAEMON_MON_PERIOD (5 * HZ)
+
 
 static int fuse_uring_copy_to_ring(struct fuse_conn *fc,
 				   struct fuse_req *req,
@@ -483,6 +486,24 @@ void fuse_destroy_uring(struct fuse_conn *fc)
 }
 EXPORT_SYMBOL_GPL(fuse_destroy_uring);
 
+/**
+ * Fallback to stop uring resources if there is no thread from
+ * userspace doing that.
+ * Having a waiting userspace process if preferred, as this
+ * method requires interval monitoring and hence, repeating cpu resources.
+ */
+static void fuse_dev_ring_stop_monitor_fn(struct work_struct *work)
+{
+	struct fuse_conn *fc = container_of(work, struct fuse_conn,
+					      ring.stop_monitor.work);
+	struct fuse_iqueue *fiq = &fc->iq;
+
+	if ((fc->ring.daemon->flags & PF_EXITING) || !fiq->connected ||
+	    fc->ring.stop_requested)
+		fuse_destroy_uring(fc);
+}
+
+
 static int fuse_dev_create_uring_req_mem(struct fuse_ring_req *req, int size)
 {
 	const int flags = GFP_KERNEL_ACCOUNT | __GFP_ZERO | __GFP_NOWARN | __GFP_COMP;
@@ -525,6 +546,9 @@ static int fuse_dev_uring_setup(struct fuse_conn *fc, struct fuse_uring_cfg *cfg
 		rc = -EALREADY;
 		goto unlock;
 	}
+
+	INIT_DELAYED_WORK(&fc->ring.stop_monitor, fuse_dev_ring_stop_monitor_fn);
+	schedule_delayed_work(&fc->ring.stop_monitor, FURING_DAEMON_MON_PERIOD);
 
 	req_size = cfg->queue_depth * sizeof(struct fuse_ring_req);
 	queue_size = (sizeof(*fc->ring.queues) + req_size) * cfg->num_queues;
@@ -577,6 +601,11 @@ static int fuse_dev_uring_wait_destruct(struct fuse_conn *fc)
 		 fc->ring.daemon->flags & PF_EXITING, fiq->connected,
 		 fc->ring.stop_requested);
 
+	/* This userspace thread can stop uring on process stop, no need
+	 * for the interval worker
+	 */
+	mod_delayed_work(system_wq, &fc->ring.stop_monitor, -1UL);
+
 	wait_event_interruptible_exclusive(fc->ring.stop_waitq,
 					   !fiq->connected ||
 					   fc->ring.stop_requested ||
@@ -585,6 +614,13 @@ static int fuse_dev_uring_wait_destruct(struct fuse_conn *fc)
 	if ((fc->ring.daemon->flags & PF_EXITING) || !fiq->connected ||
 	    fc->ring.stop_requested)
 		fuse_destroy_uring(fc);
+	else {
+		/* The userspace task gets scheduled to back userspace, we need
+		 * the interval worker again.
+		 */
+		mod_delayed_work(system_wq, &fc->ring.stop_monitor,
+				 FURING_DAEMON_MON_PERIOD);
+	}
 
 	return 0;
 }

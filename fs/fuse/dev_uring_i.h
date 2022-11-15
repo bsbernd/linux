@@ -22,6 +22,7 @@ struct fuse_req *fuse_request_alloc_ring(struct fuse_mount *fm);
 
 int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags);
 int fuse_dev_ring_mmap(struct file *filp, struct vm_area_struct *vma);
+void fuse_dev_ring_stop_monitor_fn(struct work_struct *work);
 
 
 #endif
