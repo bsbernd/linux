@@ -448,7 +448,8 @@ void fuse_uring_free_req(struct fuse_conn *fc,  struct fuse_ring_req *req,
 		 * would abort if somehow still alive
 		 */
 
-		free_pages(req->kbuf, get_order(fc->ring.ring_req_size));
+		free_pages((unsigned long)req->kbuf,
+			   get_order(fc->ring.ring_req_size));
 
 		pr_debug("releasing cmd qid=%d tag=%d\n",
 			 qid, tag);
@@ -463,7 +464,7 @@ void fuse_destroy_uring(struct fuse_conn *fc)
 {
 	spin_lock(&fc->ring.lock);
 	if (fc->ring.queues) {
-		int qid, tag, state;
+		int qid, tag;
 		struct fuse_ring_req *req;
 		struct fuse_ring_queue *queue;
 
@@ -471,7 +472,7 @@ void fuse_destroy_uring(struct fuse_conn *fc)
 			queue = &fc->ring.queues[qid];
 			for (tag = 0; tag < fc->ring.queue_depth; tag++) {
 				req = &queue->ring_req[tag];
-				fuse_uring_free_req(req, qid, tag);
+				fuse_uring_free_req(fc, req, qid, tag);
 			}
 		}
 
@@ -570,21 +571,20 @@ unlock:
  */
 static int fuse_dev_uring_wait_destruct(struct fuse_conn *fc)
 {
-	int err;
 	struct fuse_iqueue *fiq = &fc->iq;
 
-	while (1) {
+	pr_debug("%s exiting=%d connected=%d stop-req=%d\n", __func__,
+		 fc->ring.daemon->flags & PF_EXITING, fiq->connected,
+		 fc->ring.stop_requested);
 
-		if ((fc->ring.daemon->flags & PF_EXITING) ||
-		    fc->ring.stop_requested)
-			break;
+	wait_event_interruptible_exclusive(fc->ring.stop_waitq,
+					   !fiq->connected ||
+					   fc->ring.stop_requested ||
+					   (fc->ring.daemon->flags & PF_EXITING));
 
-		wait_event_interruptible_exclusive(&fc->ring.stop_waitq,
-						   fiq->connected);
-	}
-
-	/* XXX: We need a request busy counter to avoid destruction while busy */
-	fuse_destroy_uring(fc);
+	if ((fc->ring.daemon->flags & PF_EXITING) || !fiq->connected ||
+	    fc->ring.stop_requested)
+		fuse_destroy_uring(fc);
 
 	return 0;
 }

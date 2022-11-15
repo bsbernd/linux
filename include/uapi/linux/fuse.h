@@ -966,13 +966,15 @@ struct fuse_uring_cfg {
 	uint64_t flags;
 
 	/* number of queues */
-	uint16_t num_queues;
+	uint32_t num_queues;
 
 	/* number of entries per queue */
-	uint16_t queue_depth;
+	uint32_t queue_depth;
 
 	/* for all queues and their requests */
 	uint32_t mmap_req_size;
+
+	uint32_t padding1;
 
 	/* reserved space for future additions */
 	uint64_t padding2[8];
@@ -983,7 +985,6 @@ struct fuse_uring_cfg {
 #define FUSE_DEV_IOC_CLONE		_IOR(FUSE_DEV_IOC_MAGIC, 0, uint32_t)
 #define FUSE_DEV_IOC_URING		_IOR(FUSE_DEV_IOC_MAGIC, 1, \
 					     struct fuse_uring_cfg)
-#define FUSE_DEV_IOC_URING_WAIT		_IO(FUSE_DEV_IOC_MAGIC, 2)
 
 struct fuse_lseek_in {
 	uint64_t	fh;

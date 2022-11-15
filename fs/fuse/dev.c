@@ -2328,6 +2328,9 @@ static long fuse_dev_ioctl(struct file *file, unsigned int cmd,
 	struct fuse_dev *fud = NULL;
 	struct fuse_uring_cfg ring_conf;
 
+	pr_debug("Received cmd=%u FUSE_DEV_IOC_URING=%lu\n",
+		 cmd, FUSE_DEV_IOC_URING);
+
 	switch (cmd) {
 	case FUSE_DEV_IOC_CLONE:
 		res = -EFAULT;
