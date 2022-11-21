@@ -1,12 +1,13 @@
 {
   "version": 5,
-  "prev": "9b2e6fa4f4c9271ca9eff505c9cf60b574872021",
-  "head": "a419198cfe768cf0a368cc75863162a0e1e897e3",
+  "prev": "0c423d84775f6da4ab6e31d1e2fc6df57a046254",
+  "head": "0476de3a368d34594e12c000c074fbeb4ca12e9b",
   "applied": [
     "fuse-uring-setup",
     "fuse-dev-use-uring",
     "write-support",
-    "destrut"
+    "destrut",
+    "waitq-background-notify"
   ],
   "unapplied": [],
   "hidden": [],
@@ -22,6 +23,9 @@
     },
     "destrut": {
       "oid": "a419198cfe768cf0a368cc75863162a0e1e897e3"
+    },
+    "waitq-background-notify": {
+      "oid": "0476de3a368d34594e12c000c074fbeb4ca12e9b"
     }
   }
 }
