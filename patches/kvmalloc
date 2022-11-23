@@ -5,3 +5,4 @@ Date:   2022-11-24 00:24:03 +0100
 
 Use kvmalloc for req buffers
 
+Also fix race in fuse_uring_free_req

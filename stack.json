@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "af896f32a4d125450616a0d4fc6470df0aa9a79c",
-  "head": "df595f4375c3c44e941b80d8581063cd9123ed07",
+  "prev": "48050178e7a1d554e845d435d7ddfdf57ba2289e",
+  "head": "a2bc1403145edb7ed7239dba5271992efd285070",
   "applied": [
     "fuse-uring-setup",
     "fuse-dev-use-uring",
@@ -37,7 +37,7 @@
       "oid": "1b17acd24b04cac3800f99955fce0ca8411c81fe"
     },
     "kvmalloc": {
-      "oid": "df595f4375c3c44e941b80d8581063cd9123ed07"
+      "oid": "a2bc1403145edb7ed7239dba5271992efd285070"
     }
   }
 }
