@@ -1,0 +1,9 @@
+Bottom: 38c4ce2268becc34e32a5519506f76e015624591
+Top:    38c4ce2268becc34e32a5519506f76e015624591
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2022-11-23 22:43:51 +0100
+
+Fuse req put fix
+
+Release the memory when not a uring request and for uring ring
+req only allow to use them when the counter goes to 0.
