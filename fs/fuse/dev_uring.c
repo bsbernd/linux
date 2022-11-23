@@ -572,8 +572,6 @@ void fuse_uring_free_req(struct fuse_conn *fc, struct fuse_ring_queue *queue,
 {
 	bool can_free = false;
 
-	pr_debug("qid=%d tag=%d state=%d\n", qid, tag, state);
-
 	/* XXX Memory and command leak for commands in flight! */
 
 	spin_lock(&queue->waitq.lock);
