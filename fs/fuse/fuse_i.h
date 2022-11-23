@@ -558,8 +558,6 @@ struct fuse_ring_req {
 #define FUSE_URING_MAX_QUEUE_DEPTH 65535
 
 struct fuse_ring_queue {
-	// int q_id;
-
 	unsigned long flags;
 
 	struct fuse_conn *fc;
