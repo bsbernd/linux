@@ -847,7 +847,7 @@ int fuse_dev_uring_ioctl(struct file *file, struct fuse_uring_cfg *cfg)
 /**
  * XXX: Move to mm/util.c, but lets first get agreement on the fuse changes
  */
-static phys_addr_t dev_uring_kvmalloc_to_pfn(const void *addr)
+static phys_addr_t dev_uring_kvmalloc_to_pfn(void *addr)
 {
 	if (is_vmalloc_addr(addr))
 		return vmalloc_to_pfn(addr);
