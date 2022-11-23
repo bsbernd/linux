@@ -93,7 +93,7 @@ static int fuse_uring_copy_from_ring(struct fuse_conn *fc,
  */
 int fuse_dev_uring_write_to_ring(struct fuse_ring_req *ring_req)
 {
-	struct fuse_conn *fc = ring_req->fc;
+	struct fuse_conn *fc = ring_req->queue->fc;
 	struct fuse_uring_buf_req *buf_req = ring_req->kbuf;
 	struct fuse_req *req = &ring_req->req;
 	int err = -EIO;
@@ -129,7 +129,9 @@ int fuse_dev_uring_write_to_ring(struct fuse_ring_req *ring_req)
 		set_bit(FR_SENT, &ring_req->req_ptr->flags);
 	}
 
-	WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_USERSPACE);
+	spin_lock(&ring_req->queue->waitq.lock);
+	ring_req->state = FUSE_RING_REQ_STATE_USERSPACE;
+	spin_unlock(&ring_req->queue->waitq.lock);
 	io_uring_cmd_done(ring_req->cmd, 0, 0);
 
 	return 0;
@@ -281,7 +283,9 @@ static int fuse_dev_uring_fetch_queued(struct fuse_conn *fc,
 	struct fuse_req *q_req = NULL;
 	int rc, ret = 0;
 
-	WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_REQ);
+	spin_lock(&queue->waitq.lock);
+	ring_req->state = FUSE_RING_REQ_STATE_REQ;
+	spin_unlock(&queue->waitq.lock);
 
 	/* This should have a single request at startup only
 	 * XXX Double check and optimize away.
@@ -436,6 +440,30 @@ out:
 }
 EXPORT_SYMBOL_GPL(fuse_request_alloc_ring);
 
+/**
+ * The request is no longer needed, it can handle new data
+ */
+void fuse_dev_uring_req_release(struct fuse_req *req)
+{
+	struct fuse_ring_req *ring_req =
+		container_of(req, struct fuse_ring_req, req);
+	struct fuse_ring_queue *queue = ring_req->queue;
+
+	spin_lock(&queue->waitq.lock);
+	ring_req->state = FUSE_RING_REQ_STATE_WAITING;
+
+	if (test_bit(FR_BACKGROUND, &req->flags))
+		queue->n_req_background--;
+	else
+		queue->n_req_foreground--;
+
+	ring_req->kbuf->flags = 0;
+	__set_bit(ring_req->tag, queue->req_avail_map);
+	wake_up_locked(&queue->waitq);
+	spin_lock(&queue->waitq.lock);
+}
+EXPORT_SYMBOL_GPL(fuse_dev_uring_req_release);
+
 int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags)
 {
 	const struct fuse_uring_cmd_req *cmd_req =
@@ -445,7 +473,7 @@ int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags)
 	struct fuse_ring_queue *queue;
 	struct fuse_ring_req *ring_req;
 	u32 cmd_op = cmd->cmd_op;
-	int ret = -EINVAL;
+	int ret;
 
 	if (!(issue_flags & IO_URING_F_SQE128)) {
 		pr_info("qid=%d tag=%d SQE128 not set\n",
@@ -481,50 +509,51 @@ int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags)
 		}
 
 		ring_req->cmd = cmd;
+
+		/* There should be only the FUSE_INIT command that goes to
+		 * the list queue. No need to fetch from the list beyond
+		 * FUSE_URING_REQ_FETCH phase.
+		 */
+		ret = fuse_dev_uring_fetch_queued(fc, queue, ring_req);
+
 		break;
 	case FUSE_URING_REQ_COMMIT_AND_FETCH:
 		/* user space forgot to send the buffer - invalid command */
 		if (!cmd_req->req_buf) {
 			goto out;
 		}
-		if (ring_req->state != FUSE_RING_REQ_STATE_USERSPACE) {
+		if (READ_ONCE(ring_req->state) != FUSE_RING_REQ_STATE_USERSPACE) {
 			pr_info("Invalid request state %d, expected %d \n",
 				ring_req->state, FUSE_RING_REQ_STATE_USERSPACE);
 			goto out;
 		}
 		ring_req->cmd = cmd;
-		WRITE_ONCE(ring_req->state, FUSE_RING_REQ_STATE_COMMIT);
 
 		fuse_dev_uring_read_from_ring(fud, ring_req);
 
+		ret = 0;
+
 		break;
 	default:
+		ret = -EINVAL;
 		pr_debug("Unknown uring command %d", cmd_op);
 		goto out;
 	}
 
-	ret = fuse_dev_uring_fetch_queued(fc, queue, ring_req);
-
 	pr_debug("%s:%d ret=%d", __func__, __LINE__, ret);
 
 out:
-	spin_lock(&queue->waitq.lock);
-	if (ret < 0)
+	if (ret < 0) {
+		spin_lock(&queue->waitq.lock);
 		ring_req->state =  FUSE_RING_REQ_STATE_USERSPACE;
-	else if (ret == 0) {
-		ring_req->state = FUSE_RING_REQ_STATE_WAITING;
-
-		if (ring_req->kbuf->flags & FUSE_RING_REQ_FLAG_BACKGROUND)
-			queue->n_req_background--;
-		else
-			queue->n_req_foreground--;
-
-		__set_bit(cmd_req->tag, queue->req_avail_map);
-		wake_up(&queue->waitq);
-	} else {
-		/* the request already got handled */
+		spin_unlock(&queue->waitq.lock);
 	}
-	spin_unlock(&queue->waitq.lock);
+	else if (ret == 0)
+		fuse_dev_uring_req_release(&ring_req->req);
+	else {
+		/* the request already got handled/busy with a list req */
+		BUG_ON(ret > 1);
+	}
 
 	if (ret < 0) {
 		io_uring_cmd_done(cmd, ret, 0);
@@ -706,7 +735,7 @@ static int fuse_dev_uring_setup(struct fuse_conn *fc, struct fuse_uring_cfg *cfg
 
 		for (tag = 0; tag < fc->ring.queue_depth; tag++) {
 			struct fuse_ring_req *req = &queue->ring_req[tag];
-			req->fc = fc;
+			req->queue = queue;
 			req->tag = tag;
 			req->kbuf->flags = 0;
 			req->req_ptr = NULL;
