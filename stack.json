@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "9d365981468825f1b66e6ebe8b39a940e76dd8d8",
-  "head": "2b3f861db1b3331b10519656d54ef1a5bcba9132",
+  "prev": "be30753aec96fb0e3014aaeb46917abd478e301e",
+  "head": "86f533e994cb9dbe7e5ac393d5da32da51633dfc",
   "applied": [
     "fuse-uring-setup",
     "fuse-dev-use-uring",
@@ -10,8 +10,7 @@
     "waitq-background-notify",
     "max-background",
     "fuse-req-put-fix",
-    "kvmalloc",
-    "refresh-temp"
+    "kvmalloc"
   ],
   "unapplied": [],
   "hidden": [],
@@ -38,10 +37,7 @@
       "oid": "1b17acd24b04cac3800f99955fce0ca8411c81fe"
     },
     "kvmalloc": {
-      "oid": "02e09b918a39d94586a11a02319fe08f04932eea"
-    },
-    "refresh-temp": {
-      "oid": "2b3f861db1b3331b10519656d54ef1a5bcba9132"
+      "oid": "86f533e994cb9dbe7e5ac393d5da32da51633dfc"
     }
   }
 }
