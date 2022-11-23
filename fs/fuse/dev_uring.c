@@ -583,7 +583,6 @@ void fuse_uring_free_req(struct fuse_conn *fc, struct fuse_ring_queue *queue,
 	}
 	spin_unlock(&queue->waitq.lock);
 
-
 	if (can_free) {
 		kvfree(req->kbuf);
 
