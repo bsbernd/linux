@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "b727fed5967197d4966720a675bbf5406a6bddd5",
-  "head": "9bb75ddc71f494d35d2abd2c8b456dfd82aa1cfb",
+  "prev": "d6f8a116a49f653bd54f6fa6a5e218cee50d032f",
+  "head": "f4834ddc5ae7f2ae05f563e810109965d454983a",
   "applied": [
     "fuse-uring-setup",
     "fuse-dev-use-uring",
@@ -9,10 +9,11 @@
     "destrut",
     "waitq-background-notify",
     "max-background",
-    "fuse-req-put-fix",
+    "fuse-req-put-fix"
+  ],
+  "unapplied": [
     "fix-req-ptr"
   ],
-  "unapplied": [],
   "hidden": [],
   "patches": {
     "fuse-uring-setup": {
