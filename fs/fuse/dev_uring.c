@@ -567,28 +567,27 @@ out:
 EXPORT_SYMBOL(fuse_dev_uring);
 
 
-void fuse_uring_free_req(struct fuse_conn *fc,  struct fuse_ring_req *req,
-			 int qid, int tag)
+void fuse_uring_free_req(struct fuse_conn *fc, struct fuse_ring_queue *queue,
+			 struct fuse_ring_req *req)
 {
-	int state;
+	bool can_free = false;
 
-	state = READ_ONCE(req->state);
 	pr_debug("qid=%d tag=%d state=%d\n", qid, tag, state);
 
-	/* XXX Memory and command leak for commands
-	 * in flight!
-	 * XXX Racy
-	 */
-	if (state == FUSE_RING_REQ_STATE_WAITING) {
-		/* error code should not matter,
-		 * but better a code so that userspace
-		 * would abort if somehow still alive
-		 */
+	/* XXX Memory and command leak for commands in flight! */
 
+	spin_lock(&queue->waitq.lock);
+	if (req->state == FUSE_RING_REQ_STATE_WAITING) {
+		req->state = FUSE_RING_REQ_STATE_INIT;
+		can_free = true;
+	}
+	spin_unlock(&queue->waitq.lock);
+
+
+	if (can_free) {
 		kvfree(req->kbuf);
 
-		pr_debug("releasing cmd qid=%d tag=%d\n",
-			 qid, tag);
+		pr_debug("releasing cmd qid=%d tag=%d\n", queue->q_id, req->tag);
 		io_uring_cmd_done(req->cmd, -EIO, 0);
 	}
 }
@@ -628,7 +627,7 @@ void fuse_destroy_uring(struct fuse_conn *fc)
 
 		for (tag = 0; tag < q_depth; tag++) {
 			req = &queue->ring_req[tag];
-			fuse_uring_free_req(fc, req, qid, tag);
+			fuse_uring_free_req(fc, queue, req);
 		}
 	}
 
