@@ -124,11 +124,6 @@ int fuse_dev_uring_write_to_ring(struct fuse_ring_req *ring_req)
 	clear_bit(FR_PENDING, &req->flags);
 	set_bit(FR_SENT, &req->flags);
 
-	if (ring_req->req_ptr) {
-		clear_bit(FR_PENDING, &ring_req->req_ptr->flags);
-		set_bit(FR_SENT, &ring_req->req_ptr->flags);
-	}
-
 	spin_lock(&ring_req->queue->waitq.lock);
 	ring_req->state = FUSE_RING_REQ_STATE_USERSPACE;
 	spin_unlock(&ring_req->queue->waitq.lock);
@@ -139,6 +134,7 @@ int fuse_dev_uring_write_to_ring(struct fuse_ring_req *ring_req)
 err:
 	req->out.h.error = -EIO;
 	if (ring_req->req_ptr) {
+		*ring_req->req_ptr = *req;
 		fuse_request_end(ring_req->req_ptr);
 		ring_req->req_ptr = NULL;
 	}
@@ -252,6 +248,7 @@ out:
 	pr_debug("%s:%d ret=%zd op=%d req-ret=%d",
 		 __func__, __LINE__, err, req->args->opcode, req->out.h.error);
 	if (ring_req->req_ptr) {
+		*ring_req->req_ptr = *req;
 		fuse_request_end(ring_req->req_ptr);
 		ring_req->req_ptr = NULL;
 	}
@@ -261,8 +258,6 @@ out:
 
 seterr:
 	req->out.h.error = err;
-	if (ring_req->req_ptr)
-		ring_req->req_ptr->out.h.error = err;
 	goto out;
 }
 EXPORT_SYMBOL_GPL(fuse_dev_uring_read_from_ring);
@@ -306,7 +301,8 @@ static int fuse_dev_uring_fetch_queued(struct fuse_conn *fc,
 	if (test_bit(FR_BACKGROUND, &q_req->flags))
 		ring_req->kbuf->flags |= FUSE_RING_REQ_FLAG_BACKGROUND;
 
-	/* copy over and release the list-queued object */
+	/* copy over and store the initial req, on completion copy back has to
+	 * be done */
 	ring_req->req = *q_req;
 	ring_req->req_ptr = q_req;
 
