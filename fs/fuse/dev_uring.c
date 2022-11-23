@@ -26,6 +26,7 @@
 #include <linux/mm.h>
 #include <asm/io.h>
 #include <linux/io_uring.h>
+#include <linux/numa.h>
 
 /* default monitor interval for a dying daemon */
 #define FURING_DAEMON_MON_PERIOD (5 * HZ)
@@ -566,29 +567,24 @@ out:
 EXPORT_SYMBOL(fuse_dev_uring);
 
 
-void fuse_uring_free_req(struct fuse_conn *fc,  struct fuse_ring_req *req,
-			 int qid, int tag)
+void fuse_uring_free_req(struct fuse_conn *fc, struct fuse_ring_queue *queue,
+			 struct fuse_ring_req *req)
 {
-	int state;
+	bool can_free = false;
 
-	state = READ_ONCE(req->state);
-	pr_debug("qid=%d tag=%d state=%d\n", qid, tag, state);
+	/* XXX Memory and command leak for commands in flight! */
 
-	/* XXX Memory and command leak for commands
-	 * in flight!
-	 * XXX Racy
-	 */
-	if (state == FUSE_RING_REQ_STATE_WAITING) {
-		/* error code should not matter,
-		 * but better a code so that userspace
-		 * would abort if somehow still alive
-		 */
+	spin_lock(&queue->waitq.lock);
+	if (req->state == FUSE_RING_REQ_STATE_WAITING) {
+		req->state = FUSE_RING_REQ_STATE_INIT;
+		can_free = true;
+	}
+	spin_unlock(&queue->waitq.lock);
 
-		free_pages((unsigned long)req->kbuf,
-			   get_order(fc->ring.ring_req_size));
+	if (can_free) {
+		kvfree(req->kbuf);
 
-		pr_debug("releasing cmd qid=%d tag=%d\n",
-			 qid, tag);
+		pr_debug("releasing cmd qid=%d tag=%d\n", queue->q_id, req->tag);
 		io_uring_cmd_done(req->cmd, -EIO, 0);
 	}
 }
@@ -628,7 +624,7 @@ void fuse_destroy_uring(struct fuse_conn *fc)
 
 		for (tag = 0; tag < q_depth; tag++) {
 			req = &queue->ring_req[tag];
-			fuse_uring_free_req(fc, req, qid, tag);
+			fuse_uring_free_req(fc, queue, req);
 		}
 	}
 
@@ -656,10 +652,22 @@ static void fuse_dev_ring_stop_monitor_fn(struct work_struct *work)
 /**
  * XXX Use __vmalloc and switch mmap to vmalloc
  */
-static int fuse_dev_create_uring_req_mem(struct fuse_ring_req *req, int size)
+static int fuse_dev_create_uring_req_mem(struct fuse_conn *fc, int q_id,
+					 struct fuse_ring_req *req, int size)
 {
-	const int flags = GFP_KERNEL_ACCOUNT | __GFP_ZERO | __GFP_NOWARN | __GFP_COMP;
-	req->kbuf = (void *)__get_free_pages(flags, get_order(size));
+	const gfp_t mask = GFP_KERNEL_ACCOUNT | __GFP_ZERO | __GFP_NOWARN | __GFP_COMP;
+
+#if 0
+	int node = fc->ring.per_core_queue ? numa_cpu_node(q_id) : NUMA_NO_NODE;
+
+	/* XXX find the numa node and use kvmalloc_node() */
+	req->kbuf = kvmalloc_node(size, mask, node);
+#else
+	(void)fc;
+	(void)q_id;
+
+	req->kbuf = kvmalloc(size, mask);
+#endif
 
 	return req->kbuf ? 0 : -ENOMEM;
 }
@@ -739,7 +747,8 @@ static int fuse_dev_uring_setup(struct fuse_conn *fc, struct fuse_uring_cfg *cfg
 			pr_debug("initialize qid=%d tag=%d queue=%p req=%p",
 				 q_id, tag, queue, req);
 
-			rc = fuse_dev_create_uring_req_mem(req, cfg->mmap_req_size);
+			rc = fuse_dev_create_uring_req_mem(fc, q_id, req,
+							   cfg->mmap_req_size);
 			if (rc != 0)
 				goto unlock;
 
@@ -836,6 +845,17 @@ int fuse_dev_uring_ioctl(struct file *file, struct fuse_uring_cfg *cfg)
 }
 
 /**
+ * XXX: Move to mm/util.c, but lets first get agreement on the fuse changes
+ */
+static phys_addr_t dev_uring_kvmalloc_to_pfn(const void *addr)
+{
+	if (is_vmalloc_addr(addr))
+		return vmalloc_to_pfn(addr);
+	else
+		return virt_to_phys(addr) >> PAGE_SHIFT;
+}
+
+/**
  * This is mmap for userspace uring
  */
 int fuse_dev_ring_mmap(struct file *filp, struct vm_area_struct *vma)
@@ -867,7 +887,7 @@ int fuse_dev_ring_mmap(struct file *filp, struct vm_area_struct *vma)
 	queue = &fc->ring.queues[qid];
 	req = &queue->ring_req[tag];
 
-	pfn = virt_to_phys(req->kbuf) >> PAGE_SHIFT;
+	pfn = dev_uring_kvmalloc_to_pfn(req->kbuf);
 	ret = remap_pfn_range(vma, vma->vm_start, pfn, sz, vma->vm_page_prot);
 
 out:
