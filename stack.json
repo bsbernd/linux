@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "9f4066b875ec53b652c6d6ca9da99dc3500dd1d2",
-  "head": "5f151bc7bf432fd2caca9ec6a2ce156484203928",
+  "prev": "90de12b9d667cc78512fed5f59df16866a3030cd",
+  "head": "3fb55770cb6158899011f9e12b765cb6597f98c2",
   "applied": [
     "fuse-uring-setup",
     "fuse-dev-use-uring",
@@ -10,8 +10,7 @@
     "waitq-background-notify",
     "max-background",
     "fuse-req-put-fix",
-    "fix-req-ptr",
-    "refresh-temp"
+    "fix-req-ptr"
   ],
   "unapplied": [],
   "hidden": [],
@@ -38,10 +37,7 @@
       "oid": "f4834ddc5ae7f2ae05f563e810109965d454983a"
     },
     "fix-req-ptr": {
-      "oid": "a10154b76230e422ed5ea1087253a027817fd7ba"
-    },
-    "refresh-temp": {
-      "oid": "5f151bc7bf432fd2caca9ec6a2ce156484203928"
+      "oid": "3fb55770cb6158899011f9e12b765cb6597f98c2"
     }
   }
 }
