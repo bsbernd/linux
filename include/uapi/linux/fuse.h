@@ -1066,6 +1066,10 @@ struct fuse_secctx_header {
 	uint32_t	nr_secctx;
 };
 
+/** mmap offset, to be able to identify the device mmap requests belongs to
+ * uring
+ */
+#define FUSE_RING_MMAP_OFFSET 0x80000000
 
 /**
  * Size of the ring buffer header
