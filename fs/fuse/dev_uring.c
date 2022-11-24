@@ -670,7 +670,6 @@ int fuse_dev_uring_ioctl(struct file *file, struct fuse_uring_cfg *cfg)
 	return -EINVAL;
 }
 
-
 /**
  * This is mmap for userspace uring
  */
@@ -694,11 +693,13 @@ int fuse_dev_ring_mmap(struct file *filp, struct vm_area_struct *vma)
 
 	/* offset actually has the specifies which ring request the mmap is for */
 	off = vma->vm_pgoff << PAGE_SHIFT;
-	qid = off / fc->ring.nr_queues;
-	tag = off % fc->ring.queue_depth;
+	qid = off / (fc->ring.nr_queues * PAGE_SIZE);
+	tag = off % (fc->ring.nr_queues * PAGE_SIZE);
 
-	if (qid > fc->ring.nr_queues)
+	if (qid > fc->ring.nr_queues) {
+		goto out;
 		return -EINVAL;
+	}
 
 	queue = &fc->ring.queues[qid];
 	req = &queue->ring_req[tag];
