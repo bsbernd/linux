@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "de9b51665554e4f5606b2f34bed3b842d094f558",
-  "head": "e283f7794f2de8bc79f7842368505f3d9f5e3e22",
+  "prev": "f8da56b6a8822ffb50541b7409a448ab8811e168",
+  "head": "0158556ea88b95f4fbaf497f0a2b1f0baae89351",
   "applied": [
     "fuse-uring-setup",
     "fuse-dev-use-uring",
@@ -11,10 +11,10 @@
     "max-background",
     "fuse-req-put-fix",
     "kvmalloc",
-    "fix-multiple-cmd-per-queue",
-    "mmap-page-size"
+    "fix-multiple-cmd-per-queue"
   ],
   "unapplied": [
+    "mmap-page-size",
     "tmp"
   ],
   "hidden": [],
