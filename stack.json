@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "144252eb64487d88459ed82238a881792b3923f7",
-  "head": "ef7a393c78f757abe8d25a93617813c4f02f63b8",
+  "prev": "5596859f52d40763c052ae4aba03791af0c5f26f",
+  "head": "0158556ea88b95f4fbaf497f0a2b1f0baae89351",
   "applied": [
     "fuse-uring-setup",
     "fuse-dev-use-uring",
@@ -11,10 +11,11 @@
     "max-background",
     "fuse-req-put-fix",
     "kvmalloc",
-    "fix-multiple-cmd-per-queue",
+    "fix-multiple-cmd-per-queue"
+  ],
+  "unapplied": [
     "tmp"
   ],
-  "unapplied": [],
   "hidden": [],
   "patches": {
     "fuse-uring-setup": {
