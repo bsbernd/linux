@@ -497,6 +497,7 @@ int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags)
 
 	switch (cmd_op) {
 	case FUSE_URING_REQ_FETCH:
+		ring_req->user_buf = cmd_req->req_buf;
 
 		if (READ_ONCE(ring_req->state) != FUSE_RING_REQ_STATE_INIT) {
 			pr_debug("%s: q_id: %d tag: %d invalid req state: %d\n",
@@ -515,10 +516,13 @@ int fuse_dev_uring(struct io_uring_cmd *cmd, unsigned int issue_flags)
 
 		break;
 	case FUSE_URING_REQ_COMMIT_AND_FETCH:
-		/* user space forgot to send the buffer - invalid command */
-		if (!cmd_req->req_buf) {
+		/* mismatch to buffer assigned by FUSE_URING_REQ_FETCH
+		 * XXX Shall we remap the new buffer?
+		 */
+		if (cmd_req->req_buf != ring_req->user_buf) {
 			goto out;
 		}
+
 		if (READ_ONCE(ring_req->state) != FUSE_RING_REQ_STATE_USERSPACE) {
 			pr_info("Invalid request state %d, expected %d \n",
 				ring_req->state, FUSE_RING_REQ_STATE_USERSPACE);
@@ -566,7 +570,6 @@ out:
 }
 EXPORT_SYMBOL(fuse_dev_uring);
 
-
 void fuse_uring_free_req(struct fuse_conn *fc, struct fuse_ring_queue *queue,
 			 struct fuse_ring_req *req)
 {
@@ -582,10 +585,22 @@ void fuse_uring_free_req(struct fuse_conn *fc, struct fuse_ring_queue *queue,
 	spin_unlock(&queue->waitq.lock);
 
 	if (can_free) {
-		kvfree(req->kbuf);
-
 		pr_debug("releasing cmd qid=%d tag=%d\n", queue->q_id, req->tag);
 		io_uring_cmd_done(req->cmd, -EIO, 0);
+		spin_lock(&fc->ring.lock);
+		fc->ring.n_requests_initialized--;
+		if (fc->ring.n_requests_initialized == 0) {
+			kvfree(fc->ring.mmap_buf);
+			fc->ring.mmap_buf = NULL;
+
+			kfree(fc->ring.queues);
+			fc->ring.queues = NULL;
+
+			fc->ring.nr_queues = 0;
+
+			fc->ring.queue_depth = 0;
+		}
+		spin_unlock(&fc->ring.lock);
 	}
 }
 
@@ -603,15 +618,11 @@ void fuse_destroy_uring(struct fuse_conn *fc)
 	 * before accessing queue-waitq
 	 */
 	spin_lock(&fc->ring.lock);
-	if (fc->ring.queues) {
+	if (fc->ring.initialized) {
+		fc->ring.initialized = false;
 		nr_queues = fc->ring.nr_queues;
-		queues = fc->ring.queues;
 		q_depth = fc->ring.queue_depth;
 
-		fc->ring.nr_queues = 0;
-		fc->ring.queues = NULL;
-		fc->ring.initialized = false;
-		fc->ring.queue_depth = 0;
 	}
 	spin_unlock(&fc->ring.lock);
 
@@ -628,7 +639,6 @@ void fuse_destroy_uring(struct fuse_conn *fc)
 		}
 	}
 
-	kfree(queues);
 }
 EXPORT_SYMBOL_GPL(fuse_destroy_uring);
 
@@ -650,26 +660,22 @@ static void fuse_dev_ring_stop_monitor_fn(struct work_struct *work)
 }
 
 /**
- * XXX Use __vmalloc and switch mmap to vmalloc
+ * Allocate the buffer for a ring-request. The buffer is zeroed.
+ * XXX: Can we do this per queue to be numa aware? How to identify the
+ * queue_id/numa_node?
  */
-static int fuse_dev_create_uring_req_mem(struct fuse_conn *fc, int q_id,
-					 struct fuse_ring_req *req, int size)
+static char * fuse_dev_uring_alloc_mmap_buf(int n_queues, int q_depth,
+					    size_t req_buf_size,
+					    size_t *out_buf_sz)
+
 {
-	const gfp_t mask = GFP_KERNEL_ACCOUNT | __GFP_ZERO | __GFP_NOWARN | __GFP_COMP;
+	const gfp_t mask = GFP_KERNEL_ACCOUNT | __GFP_ZERO | __GFP_NOWARN |
+		           __GFP_COMP;
 
-#if 0
-	int node = fc->ring.per_core_queue ? numa_cpu_node(q_id) : NUMA_NO_NODE;
+	size_t size = n_queues * q_depth * req_buf_size;
 
-	/* XXX find the numa node and use kvmalloc_node() */
-	req->kbuf = kvmalloc_node(size, mask, node);
-#else
-	(void)fc;
-	(void)q_id;
-
-	req->kbuf = kvmalloc(size, mask);
-#endif
-
-	return req->kbuf ? 0 : -ENOMEM;
+	*out_buf_sz = size;
+	return kvmalloc(size, mask);
 }
 
 static int fuse_dev_uring_setup(struct fuse_conn *fc, struct fuse_uring_cfg *cfg)
@@ -693,9 +699,9 @@ static int fuse_dev_uring_setup(struct fuse_conn *fc, struct fuse_uring_cfg *cfg
 		}
 	}
 
-	if (cfg->mmap_req_size < FUSE_RING_HEADER_BUF_SIZE + PAGE_SIZE) {
+	if (cfg->ring_req_size < FUSE_RING_HEADER_BUF_SIZE + PAGE_SIZE) {
 		pr_info("Per req mmap size too small (%d), min: %ld\n",
-			cfg->mmap_req_size,
+			cfg->ring_req_size,
 			FUSE_RING_HEADER_BUF_SIZE + PAGE_SIZE);
 		return -EINVAL;
 	}
@@ -717,7 +723,7 @@ static int fuse_dev_uring_setup(struct fuse_conn *fc, struct fuse_uring_cfg *cfg
 	fc->ring.nr_queues = cfg->num_queues;
 	fc->ring.queue_depth = cfg->queue_depth;
 	fc->ring.per_core_queue = cfg->flags & FUSE_URING_IOCTL_FLAG_PER_CORE_QUEUE;
-	fc->ring.ring_req_size = cfg->mmap_req_size;
+	fc->ring.ring_req_size = cfg->ring_req_size;
 	fc->ring.queues = kcalloc(cfg->num_queues, queue_size, GFP_KERNEL);
 	fc->ring.max_background = cfg->max_background;
 
@@ -726,6 +732,11 @@ static int fuse_dev_uring_setup(struct fuse_conn *fc, struct fuse_uring_cfg *cfg
 		rc = -EINVAL;
 		goto unlock;
 	}
+
+	fc->ring.mmap_buf =
+		fuse_dev_uring_alloc_mmap_buf(cfg->num_queues, cfg->queue_depth,
+					      cfg->ring_req_size,
+					      &fc->ring.mmap_buf_size);
 
 	fc->ring.max_foreground = cfg->queue_depth - cfg->max_background;
 	for (q_id = 0; q_id < cfg->num_queues; q_id++) {
@@ -741,18 +752,13 @@ static int fuse_dev_uring_setup(struct fuse_conn *fc, struct fuse_uring_cfg *cfg
 			struct fuse_ring_req *req = &queue->ring_req[tag];
 			req->queue = queue;
 			req->tag = tag;
-			req->kbuf->flags = 0;
 			req->req_ptr = NULL;
+			req->kbuf = NULL;
+			WRITE_ONCE(req->state, FUSE_RING_REQ_STATE_INIT);
 
 			pr_debug("initialize qid=%d tag=%d queue=%p req=%p",
 				 q_id, tag, queue, req);
 
-			rc = fuse_dev_create_uring_req_mem(fc, q_id, req,
-							   cfg->mmap_req_size);
-			if (rc != 0)
-				goto unlock;
-
-			WRITE_ONCE(req->state, FUSE_RING_REQ_STATE_INIT);
 		}
 	}
 
@@ -864,35 +870,39 @@ int fuse_dev_ring_mmap(struct file *filp, struct vm_area_struct *vma)
 	struct fuse_conn *fc = fud->fc;
 	size_t sz = vma->vm_end - vma->vm_start;
 	phys_addr_t pfn;
-	int qid, tag, ret = 0;
+	int ret = 0;
 	loff_t off;
-	struct fuse_ring_queue *queue;
-	struct fuse_ring_req *req;
 
 	 /* check if uring is configured and if the requested size matches */
-	if (fc->ring.nr_queues == 0 || fc->ring.queue_depth == 0 ||
-	    sz != fc->ring.ring_req_size) {
+	if (fc->ring.mmap_buf == NULL) {
+		pr_debug("%s Mmap buffer not allocated.\n", __func__);
 		ret = -EINVAL;
 		goto out;
 	}
 
 	/* offset actually has the specifies which ring request the mmap is for */
 	off = vma->vm_pgoff << PAGE_SHIFT;
-	qid = off / fc->ring.nr_queues;
-	tag = off % fc->ring.queue_depth;
+	if (off != FUSE_RING_MMAP_OFFSET)  {
+		pr_debug("%s Invalid ring offset.\n", __func__);
+		ret = -EINVAL;
+		goto out;
 
-	if (qid > fc->ring.nr_queues)
-		return -EINVAL;
+	}
 
-	queue = &fc->ring.queues[qid];
-	req = &queue->ring_req[tag];
+	if (sz != fc->ring.mmap_buf_size) {
+		pr_debug("%s size mismatch, expected %zu, got %zu.\n",
+			 __func__, fc->ring.mmap_buf_size, sz);
+		ret = -EINVAL;
+		goto out;
 
-	pfn = dev_uring_kvmalloc_to_pfn(req->kbuf);
+	}
+
+	pfn = dev_uring_kvmalloc_to_pfn(fc->ring.mmap_buf);
 	ret = remap_pfn_range(vma, vma->vm_start, pfn, sz, vma->vm_page_prot);
 
 out:
-	pr_debug("%s: pid %d addr %lx sz %zu qid: %d tag: %d ret %d\n",
-		 __func__, current->pid, vma->vm_start, sz, qid, tag, ret);
+	pr_debug("%s: pid %d addr %lx sz %zu ret %d\n",
+		 __func__, current->pid, vma->vm_start, sz, ret);
 
 	return ret;
 }
