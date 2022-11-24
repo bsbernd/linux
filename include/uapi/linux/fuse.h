@@ -972,7 +972,7 @@ struct fuse_uring_cfg {
 	uint32_t queue_depth;
 
 	/* for all queues and their requests */
-	uint32_t mmap_req_size;
+	uint32_t ring_req_size;
 
 	/* max number of background requests
 	 * max foreground is calculated as queue_depth - max_background
@@ -1066,6 +1066,10 @@ struct fuse_secctx_header {
 	uint32_t	nr_secctx;
 };
 
+/** mmap offset, to be able to identify the device mmap requests belongs to
+ * uring
+ */
+#define FUSE_RING_MMAP_OFFSET 0x80000000
 
 /**
  * Size of the ring buffer header
