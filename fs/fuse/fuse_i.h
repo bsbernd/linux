@@ -538,6 +538,9 @@ enum fuse_ring_req_state {
 };
 
 struct fuse_ring_req {
+
+	void *user_buf;
+
 	/* pointer to kernel request buffer, userspace side has mmaped
 	 * this */
 	struct fuse_uring_buf_req *kbuf;
@@ -904,7 +907,17 @@ struct fuse_conn {
 		/* max number of foreground requests */
 		size_t max_foreground;
 
+		/* single or per core queues that hold ring requests */
 		struct fuse_ring_queue *queues;
+
+		/* number of initialized requests */
+		size_t n_requests_initialized;
+
+		/* ring buffer, which will be mmapped and assigned to
+		 * requests
+		 */
+		char *mmap_buf;
+		size_t mmap_buf_size;
 
 		/* did the ring get initialized already ? */
 		int initialized:1;

@@ -972,7 +972,7 @@ struct fuse_uring_cfg {
 	uint32_t queue_depth;
 
 	/* for all queues and their requests */
-	uint32_t mmap_req_size;
+	uint32_t ring_req_size;
 
 	/* max number of background requests
 	 * max foreground is calculated as queue_depth - max_background
