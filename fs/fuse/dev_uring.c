@@ -582,7 +582,8 @@ void fuse_uring_free_req(struct fuse_conn *fc, struct fuse_ring_queue *queue,
 	spin_unlock(&queue->waitq.lock);
 
 	if (can_free) {
-		kvfree(req->kbuf);
+		free_pages((unsigned long)req->kbuf,
+			   get_order(fc->ring.ring_req_size));
 
 		pr_debug("releasing cmd qid=%d tag=%d\n", queue->q_id, req->tag);
 		io_uring_cmd_done(req->cmd, -EIO, 0);
@@ -656,8 +657,8 @@ static int fuse_dev_create_uring_req_mem(struct fuse_conn *fc, int q_id,
 					 struct fuse_ring_req *req, int size)
 {
 	const gfp_t mask = GFP_KERNEL_ACCOUNT | __GFP_ZERO | __GFP_NOWARN | __GFP_COMP;
-
 #if 0
+
 	int node = fc->ring.per_core_queue ? numa_cpu_node(q_id) : NUMA_NO_NODE;
 
 	/* XXX find the numa node and use kvmalloc_node() */
@@ -666,7 +667,7 @@ static int fuse_dev_create_uring_req_mem(struct fuse_conn *fc, int q_id,
 	(void)fc;
 	(void)q_id;
 
-	req->kbuf = kvmalloc(size, mask);
+	req->kbuf = (void *)__get_free_pages(mask, get_order(size));
 #endif
 
 	return req->kbuf ? 0 : -ENOMEM;
@@ -741,7 +742,6 @@ static int fuse_dev_uring_setup(struct fuse_conn *fc, struct fuse_uring_cfg *cfg
 			struct fuse_ring_req *req = &queue->ring_req[tag];
 			req->queue = queue;
 			req->tag = tag;
-			req->kbuf->flags = 0;
 			req->req_ptr = NULL;
 
 			pr_debug("initialize qid=%d tag=%d queue=%p req=%p",
@@ -751,6 +751,7 @@ static int fuse_dev_uring_setup(struct fuse_conn *fc, struct fuse_uring_cfg *cfg
 							   cfg->mmap_req_size);
 			if (rc != 0)
 				goto unlock;
+			req->kbuf->flags = 0;
 
 			WRITE_ONCE(req->state, FUSE_RING_REQ_STATE_INIT);
 		}
@@ -845,17 +846,6 @@ int fuse_dev_uring_ioctl(struct file *file, struct fuse_uring_cfg *cfg)
 }
 
 /**
- * XXX: Move to mm/util.c, but lets first get agreement on the fuse changes
- */
-static phys_addr_t dev_uring_kvmalloc_to_pfn(void *addr)
-{
-	if (is_vmalloc_addr(addr))
-		return vmalloc_to_pfn(addr);
-	else
-		return virt_to_phys(addr) >> PAGE_SHIFT;
-}
-
-/**
  * This is mmap for userspace uring
  */
 int fuse_dev_ring_mmap(struct file *filp, struct vm_area_struct *vma)
@@ -869,25 +859,57 @@ int fuse_dev_ring_mmap(struct file *filp, struct vm_area_struct *vma)
 	struct fuse_ring_queue *queue;
 	struct fuse_ring_req *req;
 
-	 /* check if uring is configured and if the requested size matches */
-	if (fc->ring.nr_queues == 0 || fc->ring.queue_depth == 0 ||
-	    sz != fc->ring.ring_req_size) {
+	/* check if uring is configured and if the requested size matches */
+	if (fc->ring.nr_queues == 0 || fc->ring.queue_depth == 0) {
+		pr_debug("%s Ring not configured\n", __func__);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (sz != fc->ring.ring_req_size) {
+		pr_debug("%s Invalid size requested\n", __func__);
 		ret = -EINVAL;
 		goto out;
 	}
 
 	/* offset actually has the specifies which ring request the mmap is for */
 	off = vma->vm_pgoff << PAGE_SHIFT;
-	qid = off / fc->ring.nr_queues;
-	tag = off % fc->ring.queue_depth;
 
-	if (qid > fc->ring.nr_queues)
-		return -EINVAL;
+	if (off < FUSE_RING_MMAP_OFFSET) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	off -= FUSE_RING_MMAP_OFFSET;
+
+	/* XXX This part is ugly. Ideal would be a single large alloc (or at
+	 * least one per queue for numa affinity) and then one (or one per queue)
+	 * mmap. Userspace can easily provide its address in the uring-cmd, but
+	 * how do we know the corresponding kernel address? ublk seems to do
+	 * per page mapping - complex. Is  there an easier way to just find the
+	 * kernel address of the user buffer?
+	 * Below user space provides qid and tag encoded into offset, especially
+	 * due to page size offset value alignment requirement not nice.
+	 */
+	qid = off / (fc->ring.nr_queues * PAGE_SIZE);
+	tag = (off % (fc->ring.nr_queues * PAGE_SIZE)) / PAGE_SIZE;
+
+	if (qid > fc->ring.nr_queues || tag > fc->ring.queue_depth) {
+		ret = -EINVAL;
+		goto out;
+	}
 
 	queue = &fc->ring.queues[qid];
 	req = &queue->ring_req[tag];
 
-	pfn = dev_uring_kvmalloc_to_pfn(req->kbuf);
+	pr_debug("%s: qid: %d tag: %d req=%p kbuf=%p \n", __func__, qid, tag,
+		 req, req->kbuf);
+	if (tag == 1) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	pfn = virt_to_phys(req->kbuf) >> PAGE_SHIFT;
 	ret = remap_pfn_range(vma, vma->vm_start, pfn, sz, vma->vm_page_prot);
 
 out:
