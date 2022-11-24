@@ -1,15 +1,15 @@
 {
   "version": 5,
-  "prev": "89d1b53e21ad304642ff592915c800f5b40cab29",
-  "head": "e1faed97a9c3e8ea6b44860d1fe34b4519fd60e2",
+  "prev": "b5cacb8e65ee6e53680250e46d108b22f7ad5c5c",
+  "head": "a419198cfe768cf0a368cc75863162a0e1e897e3",
   "applied": [
     "fuse-uring-setup",
     "fuse-dev-use-uring",
     "write-support",
-    "destrut",
-    "waitq-background-notify"
+    "destrut"
   ],
   "unapplied": [
+    "waitq-background-notify",
     "max-background",
     "fuse-req-put-fix",
     "kvmalloc",
