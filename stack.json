@@ -1,14 +1,13 @@
 {
   "version": 5,
-  "prev": "04c90bb28a0b6f6cd517c70b14a84dcd875cf395",
-  "head": "193689bb71dd004480b4d1b870085a6f6c293365",
+  "prev": "d1cdc9a82c70ec4dc02cc9d31f3a08bc31269490",
+  "head": "6189d144784eee2f0b5a91aa27f648201569120e",
   "applied": [
     "rhel-4.18-513.5.1",
     "fuse-allow-non-extending",
     "fuse-invalidate-page-cache",
     "fuse-add-a-new-fuse-init-flag",
-    "fuse-write-back-dirty-pages",
-    "refresh-temp"
+    "fuse-write-back-dirty-pages"
   ],
   "unapplied": [],
   "hidden": [],
@@ -23,10 +22,7 @@
       "oid": "e10019d836b17a9591a2ca175a3b675059a9ee0e"
     },
     "fuse-write-back-dirty-pages": {
-      "oid": "ee5f88f2d6696479123303124da37bb9f6fd7dcd"
-    },
-    "refresh-temp": {
-      "oid": "193689bb71dd004480b4d1b870085a6f6c293365"
+      "oid": "6189d144784eee2f0b5a91aa27f648201569120e"
     },
     "rhel-4.18-513.5.1": {
       "oid": "1d8b223b9fc0dad0c625d89dde769a20b6d587f8"
