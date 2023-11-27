@@ -1,0 +1,56 @@
+Bottom: bfe27093f7a5fa098c37160e1ed13b56bf32b961
+Top:    bfe27093f7a5fa098c37160e1ed13b56bf32b961
+Author: Dharmendra Singh <dsingh@ddn.com>
+Date:   2023-11-27 13:03:10 +0100
+
+fuse: allow non-extending parallel direct writes on the same file
+
+In general, as of now, in FUSE, direct writes on the same file are
+serialized over inode lock i.e we hold inode lock for the full duration of
+the write request.  I could not find in fuse code and git history a comment
+which clearly explains why this exclusive lock is taken for direct writes.
+Following might be the reasons for acquiring an exclusive lock but not be
+limited to
+
+ 1) Our guess is some USER space fuse implementations might be relying on
+    this lock for serialization.
+
+ 2) The lock protects against file read/write size races.
+
+ 3) Ruling out any issues arising from partial write failures.
+
+This patch relaxes the exclusive lock for direct non-extending writes only.
+File size extending writes might not need the lock either, but we are not
+entirely sure if there is a risk to introduce any kind of regression.
+Furthermore, benchmarking with fio does not show a difference between patch
+versions that take on file size extension a) an exclusive lock and b) a
+shared lock.
+
+A possible example of an issue with i_size extending writes are write error
+cases.  Some writes might succeed and others might fail for file system
+internal reasons - for example ENOSPACE.  With parallel file size extending
+writes it _might_ be difficult to revert the action of the failing write,
+especially to restore the right i_size.
+
+With these changes, we allow non-extending parallel direct writes on the
+same file with the help of a flag called FOPEN_PARALLEL_DIRECT_WRITES.  If
+this flag is set on the file (flag is passed from libfuse to fuse kernel as
+part of file open/create), we do not take exclusive lock anymore, but
+instead use a shared lock that allows non-extending writes to run in
+parallel.  FUSE implementations which rely on this inode lock for
+serialization can continue to do so and serialized direct writes are still
+the default.  Implementations that do not do write serialization need to be
+updated and need to set the FOPEN_PARALLEL_DIRECT_WRITES flag in their file
+open/create reply.
+
+On patch review there were concerns that network file systems (or vfs
+multiple mounts of the same file system) might have issues with parallel
+writes.  We believe this is not the case, as this is just a local lock,
+which network file systems could not rely on anyway.  I.e. this lock is
+just for local consistency.
+
+Signed-off-by: Dharmendra Singh <dsingh@ddn.com>
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+Signed-off-by: Miklos Szeredi <mszeredi@redhat.com>
+
+(imported from commit 153524053bbb0d27bb2e0be36d1b46862e9ce74c)
