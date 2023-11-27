@@ -187,6 +187,9 @@
  *  7.34
  *  - add FUSE_SYNCFS
  *  - add FOPEN_PARALLEL_DIRECT_WRITES
+ *
+ *  7.39
+ *  - add FUSE_DIRECT_IO_RELAX
  */
 
 #ifndef _LINUX_FUSE_H
@@ -222,7 +225,7 @@
 #define FUSE_KERNEL_VERSION 7
 
 /** Minor version number of this interface */
-#define FUSE_KERNEL_MINOR_VERSION 34
+#define FUSE_KERNEL_MINOR_VERSION 39
 
 /** The node ID of the root inode */
 #define FUSE_ROOT_ID 1
@@ -342,6 +345,8 @@ struct fuse_file_lock {
  * FUSE_INIT_EXT: extended fuse_init_in request
  * FUSE_INIT_RESERVED: reserved, do not use
  * FUSE_HAS_EXPIRE_ONLY: kernel supports expiry-only entry invalidation
+ * FUSE_DIRECT_IO_RELAX: relax restrictions in FOPEN_DIRECT_IO mode, for now
+ *                       allow shared mmap
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)
@@ -377,6 +382,7 @@ struct fuse_file_lock {
 #define FUSE_INIT_RESERVED	(1 << 31)
 /* bits 32..63 get shifted down 32 bits into the flags2 field */
 #define FUSE_HAS_EXPIRE_ONLY	(1ULL << 35)
+#define FUSE_DIRECT_IO_RELAX	(1ULL << 36)
 
 /**
  * CUSE INIT request/reply flags
