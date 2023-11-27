@@ -1,11 +1,12 @@
 {
   "version": 5,
-  "prev": "019d8c8027ca4c2bcf3da22af1ba176478d8640d",
-  "head": "ee432f71c62dd8f71473d27f2a709bebacc09de7",
+  "prev": "7edc062a05f3d36890fa43ec9496663dfc46bcc2",
+  "head": "061d64b628dc0a1e03c8b3f8ce052de47bc117d4",
   "applied": [
     "rhel-4.18-513.5.1",
     "fuse-allow-non-extending",
-    "fuse-invalidate-page-cache"
+    "fuse-invalidate-page-cache",
+    "refresh-temp"
   ],
   "unapplied": [],
   "hidden": [],
@@ -15,6 +16,9 @@
     },
     "fuse-invalidate-page-cache": {
       "oid": "ee432f71c62dd8f71473d27f2a709bebacc09de7"
+    },
+    "refresh-temp": {
+      "oid": "061d64b628dc0a1e03c8b3f8ce052de47bc117d4"
     },
     "rhel-4.18-513.5.1": {
       "oid": "1d8b223b9fc0dad0c625d89dde769a20b6d587f8"
