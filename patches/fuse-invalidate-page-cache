@@ -1,0 +1,16 @@
+Bottom: bfb3bf0100d0ae40d8ae32d20f5997e9ed1b24ed
+Top:    bfb3bf0100d0ae40d8ae32d20f5997e9ed1b24ed
+Author: Hao Xu <howeyxu@tencent.com>
+Date:   2023-11-27 14:06:43 +0100
+
+fuse: invalidate page cache pages before direct write
+
+In FOPEN_DIRECT_IO, page cache may still be there for a file since private
+mmap is allowed.  Direct write should respect that and invalidate the
+corresponding pages so that page cache readers don't get stale data.
+
+Signed-off-by: Hao Xu <howeyxu@tencent.com>
+Tested-by: Jiachen Zhang <zhangjiachen.jaycee@bytedance.com>
+Signed-off-by: Miklos Szeredi <mszeredi@redhat.com>
+
+(imported from commit 80e4f25262f9f1a5f08154fafaa6ac4371043d35)

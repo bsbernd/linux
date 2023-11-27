@@ -1,16 +1,20 @@
 {
   "version": 5,
-  "prev": "6cb9d81017ce1881548eea3f607f074a69211b7d",
-  "head": "3ddf80cacd0f675b4aa1998ac87cd03069285be3",
+  "prev": "019d8c8027ca4c2bcf3da22af1ba176478d8640d",
+  "head": "ee432f71c62dd8f71473d27f2a709bebacc09de7",
   "applied": [
     "rhel-4.18-513.5.1",
-    "fuse-allow-non-extending"
+    "fuse-allow-non-extending",
+    "fuse-invalidate-page-cache"
   ],
   "unapplied": [],
   "hidden": [],
   "patches": {
     "fuse-allow-non-extending": {
       "oid": "3ddf80cacd0f675b4aa1998ac87cd03069285be3"
+    },
+    "fuse-invalidate-page-cache": {
+      "oid": "ee432f71c62dd8f71473d27f2a709bebacc09de7"
     },
     "rhel-4.18-513.5.1": {
       "oid": "1d8b223b9fc0dad0c625d89dde769a20b6d587f8"
