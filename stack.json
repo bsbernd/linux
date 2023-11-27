@@ -1,28 +1,24 @@
 {
   "version": 5,
-  "prev": "4bba31346665dbe1ebf952af8ad81f0f578c339f",
-  "head": "48f2fb77851cd9f7e22ba0151552ae1000a4e0c4",
+  "prev": "fc5319c0209a27f5717d5c47dac7e962782a3007",
+  "head": "7056090424d08c2f79081ea61a9228db2c7be540",
   "applied": [
     "rhel-4.18-513.5.1",
     "fuse-allow-non-extending",
     "fuse-invalidate-page-cache",
-    "fuse-add-a-new-fuse-init-flag",
-    "refresh-temp"
+    "fuse-add-a-new-fuse-init-flag"
   ],
   "unapplied": [],
   "hidden": [],
   "patches": {
     "fuse-add-a-new-fuse-init-flag": {
-      "oid": "30fdc01ed181ffacb227a95ad5549de4a7c1ece1"
+      "oid": "7056090424d08c2f79081ea61a9228db2c7be540"
     },
     "fuse-allow-non-extending": {
       "oid": "3ddf80cacd0f675b4aa1998ac87cd03069285be3"
     },
     "fuse-invalidate-page-cache": {
       "oid": "e10019d836b17a9591a2ca175a3b675059a9ee0e"
-    },
-    "refresh-temp": {
-      "oid": "48f2fb77851cd9f7e22ba0151552ae1000a4e0c4"
     },
     "rhel-4.18-513.5.1": {
       "oid": "1d8b223b9fc0dad0c625d89dde769a20b6d587f8"
