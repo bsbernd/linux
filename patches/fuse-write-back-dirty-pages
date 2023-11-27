@@ -1,0 +1,16 @@
+Bottom: d16478bd49cef875f4820444937d5ddfab36da75
+Top:    d16478bd49cef875f4820444937d5ddfab36da75
+Author: Hao Xu <howeyxu@tencent.com>
+Date:   2023-11-27 14:19:55 +0100
+
+fuse: write back dirty pages before direct write in direct_io_relax mode
+
+In direct_io_relax mode, there can be shared mmaped files and thus dirty
+pages in its page cache.  Therefore those dirty pages should be written
+back to backend before direct io to avoid data loss.
+
+Signed-off-by: Hao Xu <howeyxu@tencent.com>
+Reviewed-by: Jiachen Zhang <zhangjiachen.jaycee@bytedance.com>
+Signed-off-by: Miklos Szeredi <mszeredi@redhat.com>
+
+(imported from commit b5a2a3a0b77668257fa72ee6bc0eac90493f13c1)
