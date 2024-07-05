@@ -2126,9 +2126,12 @@ static void fuse_writepages_send(struct inode *inode,
 	spin_unlock(&fi->lock);
 }
 
-static bool fuse_writepage_need_send(struct fuse_conn *fc, loff_t pos,
-				     unsigned len, struct fuse_args_pages *ap,
-				     struct fuse_fill_wb_data *data)
+
+static bool fuse_writepage_need_send(struct fuse_conn *fc, 
+					loff_t pos, unsigned len,
+					struct fuse_args_pages *ap,
+					struct fuse_fill_wb_data *data,
+					struct writeback_control *wbc)
 {
 	struct folio *prev_folio;
 	struct fuse_folio_desc prev_desc;
@@ -2157,6 +2160,23 @@ static bool fuse_writepage_need_send(struct fuse_conn *fc, loff_t pos,
 	    !fuse_pages_realloc(data, fc->max_pages))
 		return true;
 
+	/* Reached alignment */
+	if (fc->alignment_pages) {
+		unsigned int total_pages = (bytes + PAGE_SIZE - 1) >> PAGE_SHIFT;
+		pgoff_t page_index = pos >> PAGE_SHIFT;
+
+		if (!(page_index % fc->alignment_pages)) {
+			pgoff_t end_page_index = (wbc->range_end + PAGE_SIZE - 1) >> PAGE_SHIFT;
+
+			/* we are at a point where we would write aligned
+			 * check if we potentially could reach the next alignment */
+			if (page_index + fc->alignment_pages > end_page_index)
+				return true;
+
+			if (total_pages + fc->alignment_pages > fc->max_pages)
+				return true;
+		}
+	}
 	return false;
 }
 
@@ -2180,7 +2200,7 @@ static ssize_t fuse_iomap_writeback_range(struct iomap_writepage_ctx *wpc,
 			return -EIO;
 	}
 
-	if (wpa && fuse_writepage_need_send(fc, pos, len, ap, data)) {
+	if (wpa && fuse_writepage_need_send(fc, pos, len, ap, data, wpc->wbc)) {
 		fuse_writepages_send(inode, data);
 		data->wpa = NULL;
 		data->nr_bytes = 0;

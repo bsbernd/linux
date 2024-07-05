@@ -1007,6 +1007,10 @@ struct fuse_conn {
 	 * inode->i_blkbits.
 	 */
 	u8 blkbits;
+
+	/* The foffset alignment in PAGE */
+	unsigned int alignment_pages;
+
 };
 
 /*
