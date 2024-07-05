@@ -1449,9 +1449,19 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 			}
 			if (flags & FUSE_OVER_IO_URING && fuse_uring_enabled())
 				fc->io_uring = 1;
-
 			if (flags & FUSE_REQUEST_TIMEOUT)
 				timeout = arg->request_timeout;
+			if (flags & FUSE_ALIGN_PG_ORDER || 1) {
+				/* Bernd Test */
+				if (!arg->align_page_order)
+					arg->align_page_order = 21;
+
+				if (arg->align_page_order > 0) {
+					fc->alignment_pages =
+					(1UL << arg->align_page_order)
+					>> PAGE_SHIFT;
+				}
+			}
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
 			fc->no_lock = 1;
