@@ -939,6 +939,10 @@ struct fuse_conn {
 	/**  uring connection information*/
 	struct fuse_ring *ring;
 #endif
+
+	/* The foffset alignment in PAGE */
+	unsigned int alignment_pages;
+
 };
 
 /*
