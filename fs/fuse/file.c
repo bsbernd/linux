@@ -2094,6 +2094,10 @@ static bool fuse_writepage_need_send(struct fuse_conn *fc, struct folio *folio,
 	if (ap->folios[ap->num_folios - 1]->index + 1 != folio_index(folio))
 		return true;
 
+	/* Reached alignment */
+	if (fc->alignment_pages && !(folio->index % fc->alignment_pages))
+		return true;
+
 	/* Need to grow the pages array?  If so, did the expansion fail? */
 	if (ap->num_folios == data->max_folios && !fuse_pages_realloc(data))
 		return true;
