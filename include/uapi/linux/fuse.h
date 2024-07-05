@@ -235,6 +235,7 @@
  *
  *  7.44
  *  - add FUSE_NOTIFY_INC_EPOCH
+ *  - add opt_alignment to fuse_init_out, add FUSE_ALIGN_PG_ORDER init flag
  */
 
 #ifndef _LINUX_FUSE_H
@@ -443,6 +444,8 @@ struct fuse_file_lock {
  * FUSE_OVER_IO_URING: Indicate that client supports io-uring
  * FUSE_REQUEST_TIMEOUT: kernel supports timing out requests.
  *			 init_out.request_timeout contains the timeout (in secs)
+ * FUSE_ALIGN_PG_ORDER: page order (power of 2 exponent for number of pages) for
+ *			optimimal io-size alignment
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)
@@ -485,6 +488,7 @@ struct fuse_file_lock {
 #define FUSE_PASSTHROUGH	(1ULL << 37)
 #define FUSE_NO_EXPORT_SUPPORT	(1ULL << 38)
 #define FUSE_HAS_RESEND		(1ULL << 39)
+#define FUSE_ALIGN_PG_ORDER	(1ULL << 40)
 /* Obsolete alias for FUSE_DIRECT_IO_ALLOW_MMAP */
 #define FUSE_DIRECT_IO_RELAX	FUSE_DIRECT_IO_ALLOW_MMAP
 #define FUSE_ALLOW_IDMAP	(1ULL << 40)
@@ -905,6 +909,9 @@ struct fuse_init_in {
 #define FUSE_COMPAT_INIT_OUT_SIZE 8
 #define FUSE_COMPAT_22_INIT_OUT_SIZE 24
 
+/*
+ * align_page_order: Number of pages for optimal IO, or a multiple of that
+ */
 struct fuse_init_out {
 	uint32_t	major;
 	uint32_t	minor;
@@ -919,7 +926,9 @@ struct fuse_init_out {
 	uint32_t	flags2;
 	uint32_t	max_stack_depth;
 	uint16_t	request_timeout;
-	uint16_t	unused[11];
+	uint8_t		align_page_order;
+	uint8_t		padding;
+	uint16_t	unused[10];
 };
 
 #define CUSE_INIT_INFO_MAX 4096
