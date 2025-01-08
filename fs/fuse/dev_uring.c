@@ -11,6 +11,7 @@
 
 #include <linux/fs.h>
 #include <linux/io_uring/cmd.h>
+#include <linux/page-flags.h>
 
 static bool __read_mostly enable_uring;
 module_param(enable_uring, bool, 0644);
@@ -18,7 +19,8 @@ MODULE_PARM_DESC(enable_uring,
 		 "Enable userspace communication through io-uring");
 
 #define FUSE_URING_IOV_SEGS 2 /* header and payload */
-
+#define FUSE_RING_HEADER_PG 0
+#define FUSE_RING_PAYLOAD_PG 1
 
 bool fuse_uring_enabled(void)
 {
@@ -184,6 +186,21 @@ bool fuse_uring_request_expired(struct fuse_conn *fc)
 	return false;
 }
 
+/*
+ * Copy from memmap.c, should be exported
+ */
+static void io_pages_free(struct page ***pages, int npages)
+{
+	struct page **page_array = *pages;
+
+	if (!page_array)
+		return;
+
+	unpin_user_pages(page_array, npages);
+	kvfree(page_array);
+	*pages = NULL;
+}
+
 void fuse_uring_destruct(struct fuse_conn *fc)
 {
 	struct fuse_ring *ring = fc->ring;
@@ -207,6 +224,9 @@ void fuse_uring_destruct(struct fuse_conn *fc)
 		list_for_each_entry_safe(ent, next, &queue->ent_released,
 					 list) {
 			list_del_init(&ent->list);
+			io_pages_free(&ent->header_pages, ent->nr_header_pages);
+			io_pages_free(&ent->payload_pages,
+				      ent->nr_payload_pages);
 			kfree(ent);
 		}
 
@@ -597,13 +617,67 @@ static int fuse_uring_copy_from_ring(struct fuse_ring *ring,
 	fuse_copy_init(&cs, false, &iter);
 	cs.is_uring = true;
 	cs.req = req;
+	if (ent->payload_pages)
+		cs.ring.pages = ent->payload_pages;
 
 	return fuse_copy_out_args(&cs, args, ring_in_out.payload_sz);
 }
 
- /*
-  * Copy data from the req to the ring buffer
-  */
+/*
+ * Copy data from the req to the ring buffer
+ * In order to be able to write into the ring buffer from the application,
+ * i.e. to avoid io_uring_cmd_complete_in_task(), the header needs to be
+ * pinned as well.
+ */
+static int fuse_uring_args_to_ring_pages(struct fuse_ring *ring,
+					 struct fuse_req *req,
+					 struct fuse_ring_ent *ent,
+					 struct fuse_uring_req_header *headers)
+{
+	struct fuse_copy_state cs;
+	struct fuse_args *args = req->args;
+	struct fuse_in_arg *in_args = args->in_args;
+	int num_args = args->in_numargs;
+	int err;
+
+	struct fuse_uring_ent_in_out ent_in_out = {
+		.flags = 0,
+		.commit_id = req->in.h.unique,
+	};
+
+	fuse_copy_init(&cs, 1, NULL);
+	cs.is_uring = 1;
+	cs.req = req;
+	cs.ring.pages = ent->payload_pages;
+
+	if (num_args > 0) {
+		/*
+		 * Expectation is that the first argument is the per op header.
+		 * Some op code have that as zero size.
+		 */
+		if (args->in_args[0].size > 0) {
+			memcpy(&headers->op_in, in_args->value, in_args->size);
+		}
+		in_args++;
+		num_args--;
+	}
+
+	/* copy the payload */
+	err = fuse_copy_args(&cs, num_args, args->in_pages,
+			     (struct fuse_arg *)in_args, 0);
+	if (err) {
+		pr_info_ratelimited("%s fuse_copy_args failed\n", __func__);
+		return err;
+	}
+
+	ent_in_out.payload_sz = cs.ring.copied_sz;
+	memcpy(&headers->ring_ent_in_out, &ent_in_out, sizeof(ent_in_out));
+	return err;
+}
+
+/*
+ * Copy data from the req to the ring buffer
+ */
 static int fuse_uring_args_to_ring(struct fuse_ring *ring, struct fuse_req *req,
 				   struct fuse_ring_ent *ent)
 {
@@ -627,6 +701,8 @@ static int fuse_uring_args_to_ring(struct fuse_ring *ring, struct fuse_req *req,
 	fuse_copy_init(&cs, true, &iter);
 	cs.is_uring = true;
 	cs.req = req;
+	if (ent->payload_pages)
+		cs.ring.pages = ent->payload_pages;
 
 	if (num_args > 0) {
 		/*
@@ -666,6 +742,7 @@ static int fuse_uring_copy_to_ring(struct fuse_ring_ent *ent,
 	struct fuse_ring_queue *queue = ent->queue;
 	struct fuse_ring *ring = queue->ring;
 	int err;
+	struct fuse_uring_req_header *headers = NULL;
 
 	err = -EIO;
 	if (WARN_ON(ent->state != FRRS_FUSE_REQ)) {
@@ -678,22 +755,29 @@ static int fuse_uring_copy_to_ring(struct fuse_ring_ent *ent,
 	if (WARN_ON(req->in.h.unique == 0))
 		return err;
 
-	/* copy the request */
-	err = fuse_uring_args_to_ring(ring, req, ent);
-	if (unlikely(err)) {
-		pr_info_ratelimited("Copy to ring failed: %d\n", err);
-		return err;
-	}
-
 	/* copy fuse_in_header */
-	err = copy_to_user(&ent->headers->in_out, &req->in.h,
-			   sizeof(req->in.h));
-	if (err) {
-		err = -EFAULT;
-		return err;
+	if (ent->header_pages) {
+		headers = kmap_local_page(
+			ent->header_pages[FUSE_RING_HEADER_PG]);
+
+		memcpy(&headers->in_out, &req->in.h, sizeof(req->in.h));
+
+		err = fuse_uring_args_to_ring_pages(ring, req, ent, headers);
+		kunmap_local(headers);
+	} else {
+		/* copy the request */
+		err = fuse_uring_args_to_ring(ring, req, ent);
+		if (unlikely(err)) {
+			pr_info_ratelimited("Copy to ring failed: %d\n", err);
+			return err;
+		}
+		err = copy_to_user(&ent->headers->in_out, &req->in.h,
+				   sizeof(req->in.h));
+		if (err)
+			err = -EFAULT;
 	}
 
-	return 0;
+	return err;
 }
 
 static int fuse_uring_prepare_send(struct fuse_ring_ent *ent,
@@ -1008,6 +1092,45 @@ static void fuse_uring_do_register(struct fuse_ring_ent *ent,
 }
 
 /*
+ * Copy from memmap.c, should be exported there
+ */
+static struct page **io_pin_pages(unsigned long uaddr, unsigned long len,
+				  int *npages)
+{
+	unsigned long start, end, nr_pages;
+	struct page **pages;
+	int ret;
+
+	end = (uaddr + len + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	start = uaddr >> PAGE_SHIFT;
+	nr_pages = end - start;
+	if (WARN_ON_ONCE(!nr_pages))
+		return ERR_PTR(-EINVAL);
+
+	pages = kvmalloc_array(nr_pages, sizeof(struct page *), GFP_KERNEL);
+	if (!pages)
+		return ERR_PTR(-ENOMEM);
+
+	ret = pin_user_pages_fast(uaddr, nr_pages, FOLL_WRITE | FOLL_LONGTERM,
+				  pages);
+	/* success, mapped all pages */
+	if (ret == nr_pages) {
+		*npages = nr_pages;
+		return pages;
+	}
+
+	/* partial map, or didn't map anything */
+	if (ret >= 0) {
+		/* if we did partial map, release any pages we did get */
+		if (ret)
+			unpin_user_pages(pages, ret);
+		ret = -EFAULT;
+	}
+	kvfree(pages);
+	return ERR_PTR(ret);
+}
+
+/*
  * sqe->addr is a ptr to an iovec array, iov[0] has the headers, iov[1]
  * the payload
  */
@@ -1029,6 +1152,59 @@ static int fuse_uring_get_iovec_from_sqe(const struct io_uring_sqe *sqe,
 			   FUSE_URING_IOV_SEGS, &iov, &iter);
 	if (ret < 0)
 		return ret;
+
+	return 0;
+}
+
+static int fuse_uring_pin_pages(struct fuse_ring_ent *ent)
+{
+	struct fuse_ring *ring = ent->queue->ring;
+	int err;
+
+	/*
+	 * This needs to do locked memory accounting, for now privileged servers
+	 * only.
+	 */
+	if (!capable(CAP_SYS_ADMIN))
+		return 0;
+
+	/* Pin header pages */
+	if (!PAGE_ALIGNED(ent->headers)) {
+		pr_info_ratelimited("ent->headers is not page-aligned: %p\n",
+				    ent->headers);
+		return -EINVAL;
+	}
+
+	ent->header_pages = io_pin_pages((unsigned long)ent->headers,
+					 sizeof(struct fuse_uring_req_header),
+					 &ent->nr_header_pages);
+	if (IS_ERR(ent->header_pages)) {
+		err = PTR_ERR(ent->header_pages);
+		pr_info_ratelimited("Failed to pin header pages, err=%d\n",
+				    err);
+		ent->header_pages = NULL;
+		return err;
+	}
+
+	if (ent->nr_header_pages != 1) {
+		pr_info_ratelimited("Header pages not pinned as one page\n");
+		io_pages_free(&ent->header_pages, ent->nr_header_pages);
+		ent->header_pages = NULL;
+		return -EINVAL;
+	}
+
+	/* Pin payload pages */
+	ent->payload_pages = io_pin_pages((unsigned long)ent->payload,
+					  ring->max_payload_sz,
+					  &ent->nr_payload_pages);
+	if (IS_ERR(ent->payload_pages)) {
+		err = PTR_ERR(ent->payload_pages);
+		pr_info_ratelimited("Failed to pin payload pages, err=%d\n",
+				    err);
+		io_pages_free(&ent->header_pages, ent->nr_header_pages);
+		ent->payload_pages = NULL;
+		return err;
+	}
 
 	return 0;
 }
@@ -1073,6 +1249,12 @@ fuse_uring_create_ring_ent(struct io_uring_cmd *cmd,
 	ent->queue = queue;
 	ent->headers = iov[0].iov_base;
 	ent->payload = iov[1].iov_base;
+
+	err = fuse_uring_pin_pages(ent);
+	if (err) {
+		kfree(ent);
+		return ERR_PTR(err);
+	}
 
 	atomic_inc(&ring->queue_refs);
 	return ent;
