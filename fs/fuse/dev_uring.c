@@ -1237,12 +1237,31 @@ static struct fuse_ring_queue *fuse_uring_task_to_queue(struct fuse_ring *ring)
 	return queue;
 }
 
-static void fuse_uring_dispatch_ent(struct fuse_ring_ent *ent)
+static void fuse_uring_dispatch_ent(struct fuse_ring_ent *ent, bool bg)
 {
 	struct io_uring_cmd *cmd = ent->cmd;
 
-	uring_cmd_set_ring_ent(cmd, ent);
-	io_uring_cmd_complete_in_task(cmd, fuse_uring_send_in_task);
+	/*
+	 * Task needed when pages are not pinned as the application doing IO
+	 * is not allowed to write into fuse-server pages.
+	 * Additionally for IO through io-uring as issue flags are unknown then.
+	 * backgrounds requests might hold spin-locks, that conflict with
+	 * io_uring_cmd_done() mutex lock.
+	 */
+	if (!ent->header_pages || current->io_uring || bg) {
+		uring_cmd_set_ring_ent(cmd, ent);
+		io_uring_cmd_complete_in_task(cmd, fuse_uring_send_in_task);
+	} else {
+		int err = fuse_uring_prepare_send(ent, ent->fuse_req);
+		struct fuse_ring_queue *queue = ent->queue;
+
+		if (err) {
+			fuse_uring_next_fuse_req(ent, queue,
+						 IO_URING_F_UNLOCKED);
+			return;
+		}
+		fuse_uring_send(ent, cmd, 0, IO_URING_F_UNLOCKED);
+	}
 }
 
 /* queue a fuse request and send it if a ring entry is available */
@@ -1275,7 +1294,7 @@ void fuse_uring_queue_fuse_req(struct fuse_iqueue *fiq, struct fuse_req *req)
 	spin_unlock(&queue->lock);
 
 	if (ent)
-		fuse_uring_dispatch_ent(ent);
+		fuse_uring_dispatch_ent(ent, false);
 
 	return;
 
@@ -1328,7 +1347,7 @@ bool fuse_uring_queue_bq_req(struct fuse_req *req)
 		fuse_uring_add_req_to_ring_ent(ent, req);
 		spin_unlock(&queue->lock);
 
-		fuse_uring_dispatch_ent(ent);
+		fuse_uring_dispatch_ent(ent, true);
 	} else {
 		spin_unlock(&queue->lock);
 	}
