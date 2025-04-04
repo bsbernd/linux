@@ -1114,10 +1114,7 @@ static inline void fuse_sync_bucket_dec(struct fuse_sync_bucket *bucket)
  */
 static inline u64 fuse_get_unique(struct fuse_iqueue *fiq)
 {
-	int step = FUSE_REQ_ID_STEP * (task_cpu(current));
-	u64 cntr = this_cpu_inc_return(*fiq->reqctr);
-
-	return cntr * FUSE_REQ_ID_STEP * NR_CPUS + step;
+	return this_cpu_add_return(*fiq->reqctr, FUSE_REQ_ID_STEP * NR_CPUS);
 }
 
 /** Device operations */
