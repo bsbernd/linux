@@ -1,10 +1,11 @@
 {
   "version": 5,
-  "prev": "9745692ca93b8ce57b454e33f74883975974132e",
-  "head": "03a3617f92c2a7220af20d5b6b44420049dbe6e3",
-  "applied": [],
+  "prev": "1721c323c17e25917d922089ecd73d64049d9372",
+  "head": "4fea593e625cd50d4d11be227007849b12f17bfb",
+  "applied": [
+    "fuse-optimize-over-io-uring"
+  ],
   "unapplied": [
-    "fuse-optimize-over-io-uring",
     "mm-skip-folio-reclaim-in",
     "fuse-remove-tmp-folio-for",
     "fuse-support-copying-large",
