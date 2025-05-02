@@ -1,8 +1,9 @@
 {
   "version": 5,
-  "prev": "fd740f56eda69347af424c39e7558d30a926a4b3",
-  "head": "2715aa759c8e78572bee810699eab93d21a5a75a",
-  "applied": [
+  "prev": "9745692ca93b8ce57b454e33f74883975974132e",
+  "head": "03a3617f92c2a7220af20d5b6b44420049dbe6e3",
+  "applied": [],
+  "unapplied": [
     "fuse-optimize-over-io-uring",
     "mm-skip-folio-reclaim-in",
     "fuse-remove-tmp-folio-for",
@@ -18,7 +19,6 @@
     "fuse-optimize-direct-io-large",
     "fuse-support-large-folios-for-7"
   ],
-  "unapplied": [],
   "hidden": [],
   "patches": {
     "fuse-optimize-direct-io-large": {
