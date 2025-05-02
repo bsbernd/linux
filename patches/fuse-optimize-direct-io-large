@@ -1,0 +1,13 @@
+Bottom: d91836d28c7390e3ebbdb53f23e6deeebd3df8e4
+Top:    3c7ea77b8225cd46d6ee05532504ee07ec154b94
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2025-05-03 01:37:02 +0200
+
+fuse: optimize direct io large folios processing
+
+Optimize processing folios larger than one page size for the direct io
+case. If contiguous pages are part of the same folio, collate the
+processing instead of processing each page in the folio separately.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Jeff Layton <jlayton@kernel.org>

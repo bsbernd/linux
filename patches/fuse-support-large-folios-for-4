@@ -1,0 +1,13 @@
+Bottom: 5dc189886bed5bead538758b4bdc05a0f0836f76
+Top:    6ad8e4e0b827dd2d25f84cfcbb41fa2a4732fc41
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2025-05-03 01:37:02 +0200
+
+fuse: support large folios for stores
+
+Add support for folios larger than one page size for stores.
+Also change variable naming from "this_num" to "nr_bytes".
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Josef Bacik <josef@toxicpanda.com>
+Reviewed-by: Jeff Layton <jlayton@kernel.org>

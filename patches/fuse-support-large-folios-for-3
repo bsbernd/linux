@@ -1,0 +1,13 @@
+Bottom: 0be95925d07994e9c3ba4ea25043eb17717f05ff
+Top:    5dc189886bed5bead538758b4bdc05a0f0836f76
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2025-05-03 01:37:02 +0200
+
+fuse: support large folios for symlinks
+
+Support large folios for symlinks and change the name from
+fuse_getlink_page() to fuse_getlink_folio().
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Josef Bacik <josef@toxicpanda.com>
+Reviewed-by: Jeff Layton <jlayton@kernel.org>

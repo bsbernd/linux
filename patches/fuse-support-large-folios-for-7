@@ -1,0 +1,12 @@
+Bottom: 3c7ea77b8225cd46d6ee05532504ee07ec154b94
+Top:    fe7a846420781301fcffbec5dcc643cc721a964e
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2025-05-03 01:37:03 +0200
+
+fuse: support large folios for writeback
+
+Add support for folios larger than one page size for writeback.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Josef Bacik <josef@toxicpanda.com>
+Reviewed-by: Jeff Layton <jlayton@kernel.org>

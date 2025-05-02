@@ -1,0 +1,13 @@
+Bottom: 08d16a4303191acdd9eac0406bc977c8643b02b2
+Top:    9f4d1a4e0310b3e32d29fbfb8aaa6b7e586d6560
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2025-05-03 01:37:01 +0200
+
+fuse: support copying large folios
+
+Currently, all folios associated with fuse are one page size. As part of
+the work to enable large folios, this commit adds support for copying
+to/from folios larger than one page size.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Jeff Layton <jlayton@kernel.org>

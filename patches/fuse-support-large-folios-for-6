@@ -1,0 +1,11 @@
+Bottom: 016556ba8d8184146133527ebdf50476c9242274
+Top:    d91836d28c7390e3ebbdb53f23e6deeebd3df8e4
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2025-05-03 01:37:02 +0200
+
+fuse: support large folios for readahead
+
+Add support for folios larger than one page size for readahead.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Jeff Layton <jlayton@kernel.org>

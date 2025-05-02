@@ -1,0 +1,12 @@
+Bottom: 9f4d1a4e0310b3e32d29fbfb8aaa6b7e586d6560
+Top:    bc1237b272884fc72bc40cf9108a998106536b2a
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2025-05-03 01:37:01 +0200
+
+fuse: support large folios for retrieves
+
+Add support for folios larger than one page size for retrieves.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Josef Bacik <josef@toxicpanda.com>
+Reviewed-by: Jeff Layton <jlayton@kernel.org>

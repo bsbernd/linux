@@ -1,0 +1,12 @@
+Bottom: 904a3672cc5f3680f1b3e8ba63a91eaaa786c717
+Top:    25710f6afc42a74afc554b44c4287f2bfaacae25
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2025-05-03 01:37:01 +0200
+
+fuse: support large folios for writethrough writes
+
+Add support for folios larger than one page size for writethrough
+writes.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Jeff Layton <jlayton@kernel.org>

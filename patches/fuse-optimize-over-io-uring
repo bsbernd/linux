@@ -1,0 +1,18 @@
+Bottom: 6883a7899f82fd4ef162b3ff5d3fe7ed6be56073
+Top:    448af399da21697fbda3f1538ff48966a196e4c6
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2025-04-15 13:43:38 +0200
+
+fuse: optimize over-io-uring request expiration check
+
+Currently, when checking whether a request has timed out, we check
+fpq processing, but fuse-over-io-uring has one fpq per core and 256
+entries in the processing table. For systems where there are a
+large number of cores, this may be too much overhead.
+
+Instead of checking the fpq processing list, check ent_w_req_queue
+and ent_in_userspace.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Bernd Schubert <bernd@bsbernd.com>
+Signed-off-by: Miklos Szeredi <mszeredi@redhat.com>

@@ -1,0 +1,13 @@
+Bottom: 25710f6afc42a74afc554b44c4287f2bfaacae25
+Top:    0be95925d07994e9c3ba4ea25043eb17717f05ff
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2025-05-03 01:37:02 +0200
+
+fuse: support large folios for folio reads
+
+Add support for folios larger than one page size for folio reads into
+the page cache.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Josef Bacik <josef@toxicpanda.com>
+Reviewed-by: Jeff Layton <jlayton@kernel.org>

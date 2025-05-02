@@ -1,9 +1,67 @@
 {
   "version": 5,
-  "prev": "167b9e3f23b62c299f014a0948177e99a0582a44",
+  "prev": "fd740f56eda69347af424c39e7558d30a926a4b3",
   "head": "2715aa759c8e78572bee810699eab93d21a5a75a",
-  "applied": [],
+  "applied": [
+    "fuse-optimize-over-io-uring",
+    "mm-skip-folio-reclaim-in",
+    "fuse-remove-tmp-folio-for",
+    "fuse-support-copying-large",
+    "fuse-support-large-folios-for",
+    "fuse-refactor",
+    "fuse-support-large-folios-for-1",
+    "fuse-support-large-folios-for-2",
+    "fuse-support-large-folios-for-3",
+    "fuse-support-large-folios-for-4",
+    "fuse-support-large-folios-for-5",
+    "fuse-support-large-folios-for-6",
+    "fuse-optimize-direct-io-large",
+    "fuse-support-large-folios-for-7"
+  ],
   "unapplied": [],
   "hidden": [],
-  "patches": {}
+  "patches": {
+    "fuse-optimize-direct-io-large": {
+      "oid": "60232804f291883bf7a3ddf00432e9190e38c9f9"
+    },
+    "fuse-optimize-over-io-uring": {
+      "oid": "4fea593e625cd50d4d11be227007849b12f17bfb"
+    },
+    "fuse-refactor": {
+      "oid": "faa108dc697db5d17f4223c136239d49636bac58"
+    },
+    "fuse-remove-tmp-folio-for": {
+      "oid": "0c58a97f919c24fe4245015f4375a39ff05665b6"
+    },
+    "fuse-support-copying-large": {
+      "oid": "c5cd75cb043c85eb96c013569e7a1b0b22961e52"
+    },
+    "fuse-support-large-folios-for": {
+      "oid": "1b98aa65ac9b59fec5af039b811699d19eefc9c3"
+    },
+    "fuse-support-large-folios-for-1": {
+      "oid": "c6aba103e788ae5d805e1f58a56972fcb0687c31"
+    },
+    "fuse-support-large-folios-for-2": {
+      "oid": "f45baf14dda9be34eafc6112aec171e141842de1"
+    },
+    "fuse-support-large-folios-for-3": {
+      "oid": "d173280f4e5e9f0a03d9b4845bc0ac5805779c94"
+    },
+    "fuse-support-large-folios-for-4": {
+      "oid": "6de9f4373ed26bd0a9198ef152ff979541f602fe"
+    },
+    "fuse-support-large-folios-for-5": {
+      "oid": "791a43f3eaaf5c0ac22ec2d269d48aa9bfdfc830"
+    },
+    "fuse-support-large-folios-for-6": {
+      "oid": "e8ad189772228e96616642ba3c7bbef5d7a904e6"
+    },
+    "fuse-support-large-folios-for-7": {
+      "oid": "2715aa759c8e78572bee810699eab93d21a5a75a"
+    },
+    "mm-skip-folio-reclaim-in": {
+      "oid": "0c4f8ed498cea1e2beebf7aa3d198fa381264f88"
+    }
+  }
 }
