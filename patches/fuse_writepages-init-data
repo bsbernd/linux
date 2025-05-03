@@ -1,11 +1,11 @@
 Bottom: 0507f4af25a82a400e108a6007be7ca74eab9f80
 Top:    c4d654c3a88b48e9bea0d34e203d2ee0a33c8349
 Author: Bernd Schubert <bernd@bsbernd.com>
-Date:   2025-05-03 17:03:00 +0200
+Date:   2025-05-03 17:03:34 +0200
 
 fuse: Use implicit compiler initialization for fuse_fill_wb_data
 
-Just safe a few lines and use the compiler to initialize
-fuse_fill_wb_data.
+Use the compiler to set all remaining fields of
+fuse_fill_wb_data to zero.
 
 Signed-off-by: Bernd Schubert <bernd@bsbernd.com>

@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "3d3620ee89e03bec24c486ab57e5f108a4bacfa2",
-  "head": "83db8b58322172b9e95a29c19253f19427627d88",
+  "prev": "c690a3ed0ba1c2b89024c7bcf66fbaa971cad8a4",
+  "head": "892d0fe28ab70708e2dea1db09c01b282960dc16",
   "applied": [
     "improved-alignment",
     "fuse_writepages-init-data"
@@ -10,7 +10,7 @@
   "hidden": [],
   "patches": {
     "fuse_writepages-init-data": {
-      "oid": "83db8b58322172b9e95a29c19253f19427627d88"
+      "oid": "892d0fe28ab70708e2dea1db09c01b282960dc16"
     },
     "improved-alignment": {
       "oid": "31ce0ade192b06342dab727f18878f984b83a648"
