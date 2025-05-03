@@ -1,0 +1,16 @@
+Bottom: 9e8a6c5d146ee7c545336a1acb613c4dd5ad6687
+Top:    af73ccdcd81f83751e86bac264fc63086c3c9625
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2025-04-03 22:15:12 +0200
+
+fuse: Set request unique on allocation
+
+This is especially needed for better ftrace analysis,
+for example to build histograms. So far the request unique
+was missing, because it was added after the first trace message.
+
+IDs/req-unique now might not come up perfectly sequentially
+anymore, but especially  with cloned device or io-uring this
+did not work perfectly anyway.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>

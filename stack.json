@@ -1,19 +1,44 @@
 {
   "version": 5,
-  "prev": "b99439339cc766e1ebba9d25572c46b14ddebc5f",
+  "prev": "e0b3e5c229affa42e649310883904590ce844089",
   "head": "767105641b540bf7d0e93e8418dc14b307a0cff1",
-  "applied": [],
+  "applied": [
+    "fuse-make-the-fuse-unique",
+    "fuse-set-request-unique-on",
+    "fuse-io-uring-avoid-_send-code",
+    "fuse-fine-grained-request",
+    "per-cpu-cntr-fix",
+    "fuse-make-foffset-alignment"
+  ],
   "unapplied": [
     "improved-alignment",
     "fuse_writepages-init-data"
   ],
   "hidden": [],
   "patches": {
+    "fuse-fine-grained-request": {
+      "oid": "9ff3a05fea6dca9667bd64a9c5b490ac1d1442e9"
+    },
+    "fuse-io-uring-avoid-_send-code": {
+      "oid": "167496c10b2ca45474f7ba62c3538022b04c8420"
+    },
+    "fuse-make-foffset-alignment": {
+      "oid": "767105641b540bf7d0e93e8418dc14b307a0cff1"
+    },
+    "fuse-make-the-fuse-unique": {
+      "oid": "ab2d0f937f9596817751af615010bb85f810d73a"
+    },
+    "fuse-set-request-unique-on": {
+      "oid": "51a6e93422b987bb68400a663be5c5832b253f55"
+    },
     "fuse_writepages-init-data": {
       "oid": "9030b957675cd7994a9f466ee6d48156031be92e"
     },
     "improved-alignment": {
       "oid": "31ce0ade192b06342dab727f18878f984b83a648"
+    },
+    "per-cpu-cntr-fix": {
+      "oid": "d8afbaa0de2ccd931a6e488e811f71106e3dcabc"
     }
   }
 }
