@@ -1,10 +1,9 @@
 {
   "version": 5,
-  "prev": "5e9b333825b6e30250cb6927c47427a53124c1e7",
+  "prev": "ba4c8ceeb8c66f14f50b8f892a18a3a8180cf38c",
   "head": "0c58a97f919c24fe4245015f4375a39ff05665b6",
   "applied": [],
   "unapplied": [
-    "per-cpu-cntr-fix",
     "fuse-make-foffset-alignment",
     "improved-alignment",
     "fuse_writepages-init-data"
@@ -19,9 +18,6 @@
     },
     "improved-alignment": {
       "oid": "31ce0ade192b06342dab727f18878f984b83a648"
-    },
-    "per-cpu-cntr-fix": {
-      "oid": "d8afbaa0de2ccd931a6e488e811f71106e3dcabc"
     }
   }
 }
