@@ -1,20 +1,19 @@
 {
   "version": 5,
-  "prev": "bc24d10a31a1d0e5da8a9062e91e4e79d096b19a",
-  "head": "9b51db9a30d3a9beb6bba42c01b33f25a0925be7",
+  "prev": "77ae11d292eac36823f365bf458c1e0d379d6ab6",
+  "head": "d5fd6b5c701c3c4d3b5d06732048fb954ccbcce4",
   "applied": [
-    "fuse-make-foffset-alignment"
-  ],
-  "unapplied": [
+    "fuse-make-foffset-alignment",
     "fuse_writepages-init-data"
   ],
+  "unapplied": [],
   "hidden": [],
   "patches": {
     "fuse-make-foffset-alignment": {
       "oid": "9b51db9a30d3a9beb6bba42c01b33f25a0925be7"
     },
     "fuse_writepages-init-data": {
-      "oid": "3bf8764b01fa9a26d22038564bddff08fd248a9f"
+      "oid": "d5fd6b5c701c3c4d3b5d06732048fb954ccbcce4"
     }
   }
 }
