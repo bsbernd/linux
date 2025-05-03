@@ -2452,7 +2452,7 @@ static int fuse_writepages(struct address_space *mapping,
 {
 	struct inode *inode = mapping->host;
 	struct fuse_conn *fc = get_fuse_conn(inode);
-	struct fuse_fill_wb_data data;
+	struct fuse_fill_wb_data data = { .inode = inode };
 	int err;
 
 	err = -EIO;
@@ -2462,10 +2462,6 @@ static int fuse_writepages(struct address_space *mapping,
 	if (wbc->sync_mode == WB_SYNC_NONE &&
 	    fc->num_background >= fc->congestion_threshold)
 		return 0;
-
-	data.inode = inode;
-	data.wpa = NULL;
-	data.ff = NULL;
 
 	err = -ENOMEM;
 	data.orig_folios = kcalloc(fc->max_pages,
