@@ -1,15 +1,44 @@
 {
   "version": 5,
-  "prev": "fb327b6cfd38ce5ba715c07fdb4f616980436845",
+  "prev": "d28e76724f87e071956297c07b5d2c53a4fb3159",
   "head": "767105641b540bf7d0e93e8418dc14b307a0cff1",
-  "applied": [],
+  "applied": [
+    "fuse-improve-ftraces-per-cpu",
+    "fuse-make-the-fuse-unique",
+    "fuse-set-request-unique-on",
+    "fuse-io-uring-avoid-_send-code",
+    "fuse-fine-grained-request",
+    "per-cpu-cntr-fix",
+    "fuse-make-foffset-alignment"
+  ],
   "unapplied": [
     "improved-alignment"
   ],
   "hidden": [],
   "patches": {
+    "fuse-fine-grained-request": {
+      "oid": "9ff3a05fea6dca9667bd64a9c5b490ac1d1442e9"
+    },
+    "fuse-improve-ftraces-per-cpu": {
+      "oid": "c1149f8964ec0fd6736432767ef0661014db30d5"
+    },
+    "fuse-io-uring-avoid-_send-code": {
+      "oid": "167496c10b2ca45474f7ba62c3538022b04c8420"
+    },
+    "fuse-make-foffset-alignment": {
+      "oid": "767105641b540bf7d0e93e8418dc14b307a0cff1"
+    },
+    "fuse-make-the-fuse-unique": {
+      "oid": "ab2d0f937f9596817751af615010bb85f810d73a"
+    },
+    "fuse-set-request-unique-on": {
+      "oid": "51a6e93422b987bb68400a663be5c5832b253f55"
+    },
     "improved-alignment": {
       "oid": "31ce0ade192b06342dab727f18878f984b83a648"
+    },
+    "per-cpu-cntr-fix": {
+      "oid": "d8afbaa0de2ccd931a6e488e811f71106e3dcabc"
     }
   }
 }

@@ -1,0 +1,71 @@
+Bottom: 179b90c8371e8f32673cd5a84f65ad36244d3c3a
+Top:    179b90c8371e8f32673cd5a84f65ad36244d3c3a
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2025-04-02 17:52:40 +0200
+
+fuse: Improve ftraces, per-cpu req unique and code dup removal
+
+This series is mainly about improved ftraces to determine
+latencies between queues and also to be able to create
+latency histograms - the request unique was missing in
+trace_fuse_request_send so far.
+Some preparation patches are added before.
+
+Scripts to enabled tracing and to get histograms are here
+https://github.com/libfuse/libfuse/pull/1186
+
+# Describe the purpose of this series. The information you put here
+# will be used by the project maintainer to make a decision whether
+# your patches should be reviewed, and in what priority order. Please be
+# very detailed and link to any relevant discussions or sites that the
+# maintainer can review to better understand your proposed changes. If you
+# only have a single patch in your series, the contents of the cover
+# letter will be appended to the "under-the-cut" portion of the patch.
+
+# Lines starting with # will be removed from the cover letter. You can
+# use them to add notes or reminders to yourself. If you want to use
+# markdown headers in your cover letter, start the line with ">#".
+
+# You can add trailers to the cover letter. Any email addresses found in
+# these trailers will be added to the addresses specified/generated
+# during the b4 send stage. You can also run "b4 prep --auto-to-cc" to
+# auto-populate the To: and Cc: trailers based on the code being
+# modified.
+
+To: Miklos Szeredi <miklos@szeredi.hu>
+To: Vivek Goyal <vgoyal@redhat.com>
+To: Stefan Hajnoczi <stefanha@redhat.com>
+To: Eugenio Pérez <eperezma@redhat.com>
+Cc: linux-fsdevel@vger.kernel.org
+Cc: Joanne Koong <joannelkoong@gmail.com>
+CC: Josef Bacik <josef@toxicpanda.com>
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+---
+Changes in v3:
+- EDITME: describe what is new in this series revision.
+- EDITME: use bulletpoints and terse descriptions.
+- Link to v2: https://lore.kernel.org/r/20250403-fuse-io-uring-trace-points-v2-0-bd04f2b22f91@ddn.com
+
+Changes in v2:
+- EDITME: describe what is new in this series revision.
+- EDITME: use bulletpoints and terse descriptions.
+- Link to v1: https://lore.kernel.org/r/20250402-fuse-io-uring-trace-points-v1-0-11b0211fa658@ddn.com
+
+--- b4-submit-tracking ---
+# This section is used internally by b4 prep for tracking purposes.
+{
+  "series": {
+    "revision": 3,
+    "change-id": "20250402-fuse-io-uring-trace-points-690154bb72c7",
+    "prefixes": [],
+    "history": {
+      "v1": [
+        "20250402-fuse-io-uring-trace-points-v1-0-11b0211fa658@ddn.com"
+      ],
+      "v2": [
+        "20250403-fuse-io-uring-trace-points-v2-0-bd04f2b22f91@ddn.com"
+      ]
+    }
+  }
+}
