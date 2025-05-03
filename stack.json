@@ -1,10 +1,11 @@
 {
   "version": 5,
-  "prev": "95a4b9d0787a1e2dc58ad5f11d8277cad2b221c7",
-  "head": "0c58a97f919c24fe4245015f4375a39ff05665b6",
-  "applied": [],
+  "prev": "80c6148ce6c9e060f8a35f55938230b7fc3e7581",
+  "head": "27b3a237d5fb406679633a99581d3237d9532d22",
+  "applied": [
+    "fuse-improve-ftraces-per-cpu"
+  ],
   "unapplied": [
-    "fuse-improve-ftraces-per-cpu",
     "fuse-make-the-fuse-unique",
     "fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
@@ -19,7 +20,7 @@
       "oid": "9ff3a05fea6dca9667bd64a9c5b490ac1d1442e9"
     },
     "fuse-improve-ftraces-per-cpu": {
-      "oid": "c1149f8964ec0fd6736432767ef0661014db30d5"
+      "oid": "27b3a237d5fb406679633a99581d3237d9532d22"
     },
     "fuse-io-uring-avoid-_send-code": {
       "oid": "167496c10b2ca45474f7ba62c3538022b04c8420"
