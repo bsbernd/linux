@@ -1,12 +1,11 @@
 {
   "version": 5,
-  "prev": "cedbf0653aa7c210dfbb61fef69bb16ec9a1441e",
+  "prev": "26f33d34786d080f7f1e1d5bf3d7c50c169f6ccf",
   "head": "67c11aa1f933b831635f630b65b6f3179831ceeb",
   "applied": [
     "fuse-make-foffset-alignment"
   ],
   "unapplied": [
-    "improved-alignment",
     "fuse_writepages-init-data"
   ],
   "hidden": [],
@@ -16,9 +15,6 @@
     },
     "fuse_writepages-init-data": {
       "oid": "11ee733456f9698084020d07e2a57f80b74ce127"
-    },
-    "improved-alignment": {
-      "oid": "7900b7d915e4fe00323cfccc677ab857f643c8ea"
     }
   }
 }
