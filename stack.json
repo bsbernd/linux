@@ -1,10 +1,9 @@
 {
   "version": 5,
-  "prev": "2cb58db83342d59fb7b52c1b6f9698ca0d6c02a0",
+  "prev": "c8b7056f77139877f6a4aed017719b4b4ec3969f",
   "head": "0c58a97f919c24fe4245015f4375a39ff05665b6",
   "applied": [],
   "unapplied": [
-    "fuse-make-the-fuse-unique",
     "fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
     "fuse-fine-grained-request",
@@ -23,9 +22,6 @@
     },
     "fuse-make-foffset-alignment": {
       "oid": "767105641b540bf7d0e93e8418dc14b307a0cff1"
-    },
-    "fuse-make-the-fuse-unique": {
-      "oid": "ab2d0f937f9596817751af615010bb85f810d73a"
     },
     "fuse-set-request-unique-on": {
       "oid": "51a6e93422b987bb68400a663be5c5832b253f55"
