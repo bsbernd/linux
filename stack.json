@@ -1,10 +1,9 @@
 {
   "version": 5,
-  "prev": "095c37100977981ec23b211182cb51e13aad55f7",
+  "prev": "9dbb93ff6374766c72f164744c23d9e7c24a7504",
   "head": "0c58a97f919c24fe4245015f4375a39ff05665b6",
   "applied": [],
   "unapplied": [
-    "fuse-io-uring-avoid-_send-code",
     "fuse-fine-grained-request",
     "per-cpu-cntr-fix",
     "fuse-make-foffset-alignment",
@@ -15,9 +14,6 @@
   "patches": {
     "fuse-fine-grained-request": {
       "oid": "9ff3a05fea6dca9667bd64a9c5b490ac1d1442e9"
-    },
-    "fuse-io-uring-avoid-_send-code": {
-      "oid": "167496c10b2ca45474f7ba62c3538022b04c8420"
     },
     "fuse-make-foffset-alignment": {
       "oid": "767105641b540bf7d0e93e8418dc14b307a0cff1"
