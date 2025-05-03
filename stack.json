@@ -1,12 +1,12 @@
 {
   "version": 5,
-  "prev": "80c6148ce6c9e060f8a35f55938230b7fc3e7581",
-  "head": "27b3a237d5fb406679633a99581d3237d9532d22",
+  "prev": "091bf0cdead9df229035f7c31592d06b7d7e4adc",
+  "head": "f9731ba9c3cad2967a39895757275cc85349af22",
   "applied": [
-    "fuse-improve-ftraces-per-cpu"
+    "fuse-improve-ftraces-per-cpu",
+    "fuse-make-the-fuse-unique"
   ],
   "unapplied": [
-    "fuse-make-the-fuse-unique",
     "fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
     "fuse-fine-grained-request",
@@ -29,7 +29,7 @@
       "oid": "767105641b540bf7d0e93e8418dc14b307a0cff1"
     },
     "fuse-make-the-fuse-unique": {
-      "oid": "ab2d0f937f9596817751af615010bb85f810d73a"
+      "oid": "f9731ba9c3cad2967a39895757275cc85349af22"
     },
     "fuse-set-request-unique-on": {
       "oid": "51a6e93422b987bb68400a663be5c5832b253f55"
