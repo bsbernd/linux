@@ -2357,8 +2357,14 @@ static bool fuse_writepage_need_send(struct fuse_conn *fc, struct folio *folio,
 		return true;
 
 	/* Reached alignment */
-	if (fc->alignment_pages && !(folio->index % fc->alignment_pages))
-		return true;
+	if (fc->alignment_pages && !(folio->index % fc->alignment_pages)) {
+		/* Check if we can't reach the next alignment boundary */
+		if (ap->num_folios + fc->alignment_pages > fc->max_pages ||
+		    (ap->num_folios + fc->alignment_pages) * PAGE_SIZE >
+			    fc->max_write ||
+		    data->max_folios < ap->num_folios + fc->alignment_pages)
+			return true;
+	}
 
 	return false;
 }
