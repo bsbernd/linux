@@ -1,6 +1,0 @@
-Bottom: bfcfde38d61f674eafaf03c57fc3466c27fcb6d1
-Top:    bd04003b0b345ed3ce5a8738e0fedc67e9d36771
-Author: Bernd Schubert <bernd@bsbernd.com>
-Date:   2025-05-03 18:15:37 +0200
-
-Refresh of fuse-io-uring-avoid-_send-code
