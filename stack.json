@@ -1,10 +1,9 @@
 {
   "version": 5,
-  "prev": "c8b7056f77139877f6a4aed017719b4b4ec3969f",
+  "prev": "095c37100977981ec23b211182cb51e13aad55f7",
   "head": "0c58a97f919c24fe4245015f4375a39ff05665b6",
   "applied": [],
   "unapplied": [
-    "fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
     "fuse-fine-grained-request",
     "per-cpu-cntr-fix",
@@ -22,9 +21,6 @@
     },
     "fuse-make-foffset-alignment": {
       "oid": "767105641b540bf7d0e93e8418dc14b307a0cff1"
-    },
-    "fuse-set-request-unique-on": {
-      "oid": "51a6e93422b987bb68400a663be5c5832b253f55"
     },
     "fuse_writepages-init-data": {
       "oid": "9030b957675cd7994a9f466ee6d48156031be92e"
