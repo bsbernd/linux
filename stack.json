@@ -1,10 +1,9 @@
 {
   "version": 5,
-  "prev": "2e63eecbe7cf5f1ad21c915077a45f864f6d8056",
-  "head": "68fd95d4a3563b9947ee0e5e1a460f712f28af5d",
+  "prev": "bc24d10a31a1d0e5da8a9062e91e4e79d096b19a",
+  "head": "9b51db9a30d3a9beb6bba42c01b33f25a0925be7",
   "applied": [
-    "fuse-make-foffset-alignment",
-    "refresh-temp"
+    "fuse-make-foffset-alignment"
   ],
   "unapplied": [
     "fuse_writepages-init-data"
@@ -12,13 +11,10 @@
   "hidden": [],
   "patches": {
     "fuse-make-foffset-alignment": {
-      "oid": "67c11aa1f933b831635f630b65b6f3179831ceeb"
+      "oid": "9b51db9a30d3a9beb6bba42c01b33f25a0925be7"
     },
     "fuse_writepages-init-data": {
       "oid": "3bf8764b01fa9a26d22038564bddff08fd248a9f"
-    },
-    "refresh-temp": {
-      "oid": "68fd95d4a3563b9947ee0e5e1a460f712f28af5d"
     }
   }
 }
