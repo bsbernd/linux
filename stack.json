@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "f2bf5ab955b99f9e1e159d5132cb013081e1b59e",
-  "head": "cc58012e6eebb10c781c93ed207cf70e29dc32cb",
+  "prev": "1b1d3d60f047cad9948d2c100ae9c2c513cf5c1e",
+  "head": "8bc57ba69472e87a61c070c776e914cbeed44433",
   "applied": [
     "fuse-improve-ftraces-per-cpu",
     "fuse-make-the-fuse-unique",
@@ -9,11 +9,10 @@
     "fuse-io-uring-avoid-_send-code",
     "fuse-fine-grained-request",
     "per-cpu-cntr-fix",
-    "fuse-make-foffset-alignment"
-  ],
-  "unapplied": [
+    "fuse-make-foffset-alignment",
     "improved-alignment"
   ],
+  "unapplied": [],
   "hidden": [],
   "patches": {
     "fuse-fine-grained-request": {
@@ -35,7 +34,7 @@
       "oid": "7a092f9424201c11d69d696db976207cbe406621"
     },
     "improved-alignment": {
-      "oid": "31ce0ade192b06342dab727f18878f984b83a648"
+      "oid": "8bc57ba69472e87a61c070c776e914cbeed44433"
     },
     "per-cpu-cntr-fix": {
       "oid": "d99376fd195b8a30d12770d3d99c655aac3946a2"
