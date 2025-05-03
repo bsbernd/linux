@@ -1,13 +1,14 @@
 {
   "version": 5,
-  "prev": "8dad2b33a0efc30ea12fee1e2c493f129ed1549e",
-  "head": "11ee733456f9698084020d07e2a57f80b74ce127",
+  "prev": "0234f97051e560063a246dd140c1204aa0237aef",
+  "head": "fdc1b4d56421dfa5ddaff16bd97c65ccc89e1597",
   "applied": [
     "fuse-make-foffset-alignment",
-    "improved-alignment",
+    "improved-alignment"
+  ],
+  "unapplied": [
     "fuse_writepages-init-data"
   ],
-  "unapplied": [],
   "hidden": [],
   "patches": {
     "fuse-make-foffset-alignment": {
