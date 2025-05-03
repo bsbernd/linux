@@ -1,12 +1,12 @@
 {
   "version": 5,
-  "prev": "c4955a71d94427613c10974e715362a3268d170a",
-  "head": "9030b957675cd7994a9f466ee6d48156031be92e",
-  "applied": [
+  "prev": "b99439339cc766e1ebba9d25572c46b14ddebc5f",
+  "head": "767105641b540bf7d0e93e8418dc14b307a0cff1",
+  "applied": [],
+  "unapplied": [
     "improved-alignment",
     "fuse_writepages-init-data"
   ],
-  "unapplied": [],
   "hidden": [],
   "patches": {
     "fuse_writepages-init-data": {
