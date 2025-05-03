@@ -2094,10 +2094,6 @@ static bool fuse_writepage_need_send(struct fuse_conn *fc, struct folio *folio,
 	if (ap->folios[ap->num_folios - 1]->index + 1 != folio_index(folio))
 		return true;
 
-	/* Need to grow the pages array?  If so, did the expansion fail? */
-	if (ap->num_folios == data->max_folios && !fuse_pages_realloc(data))
-		return true;
-
 	/* Reached alignment */
 	if (fc->alignment_pages && !(folio->index % fc->alignment_pages)) {
 		/* Check if we can't reach the next alignment boundary */
@@ -2107,6 +2103,10 @@ static bool fuse_writepage_need_send(struct fuse_conn *fc, struct folio *folio,
 		    data->max_folios < ap->num_folios + fc->alignment_pages)
 			return true;
 	}
+
+	/* Need to grow the pages array?  If so, did the expansion fail? */
+	if (ap->num_folios == data->max_folios && !fuse_pages_realloc(data))
+		return true;
 
 	return false;
 }
@@ -2162,7 +2162,7 @@ static int fuse_writepages(struct address_space *mapping,
 {
 	struct inode *inode = mapping->host;
 	struct fuse_conn *fc = get_fuse_conn(inode);
-	struct fuse_fill_wb_data data;
+	struct fuse_fill_wb_data data = { .inode = inode };
 	int err;
 
 	err = -EIO;
@@ -2172,10 +2172,6 @@ static int fuse_writepages(struct address_space *mapping,
 	if (wbc->sync_mode == WB_SYNC_NONE &&
 	    fc->num_background >= fc->congestion_threshold)
 		return 0;
-
-	data.inode = inode;
-	data.wpa = NULL;
-	data.ff = NULL;
 
 	err = write_cache_pages(mapping, wbc, fuse_writepages_fill, &data);
 	if (data.wpa) {
