@@ -1,13 +1,17 @@
 {
   "version": 5,
-  "prev": "222e73bbe8e58c49b192a713399b819dcdf589f4",
-  "head": "31ce0ade192b06342dab727f18878f984b83a648",
+  "prev": "fb327b6cfd38ce5ba715c07fdb4f616980436845",
+  "head": "6fb30f519eb8287489fd4a5b31d03f08e3ad10a4",
   "applied": [
-    "improved-alignment"
+    "improved-alignment",
+    "fuse_writepages-init-data"
   ],
   "unapplied": [],
   "hidden": [],
   "patches": {
+    "fuse_writepages-init-data": {
+      "oid": "6fb30f519eb8287489fd4a5b31d03f08e3ad10a4"
+    },
     "improved-alignment": {
       "oid": "31ce0ade192b06342dab727f18878f984b83a648"
     }
