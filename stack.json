@@ -1,10 +1,11 @@
 {
   "version": 5,
-  "prev": "e78c79a3c146e9fc85c94d0ca86961af6f014f43",
-  "head": "0c58a97f919c24fe4245015f4375a39ff05665b6",
-  "applied": [],
+  "prev": "693b08d4f296b41e1a5a55fae730ca8142150b6d",
+  "head": "c5cd75cb043c85eb96c013569e7a1b0b22961e52",
+  "applied": [
+    "fuse-support-copying-large"
+  ],
   "unapplied": [
-    "fuse-support-copying-large",
     "fuse-support-large-folios-for",
     "fuse-refactor",
     "fuse-support-large-folios-for-1",
