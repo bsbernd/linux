@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "f414d36e6e7041e205fef85133db7c66f20ebd2c",
-  "head": "2715aa759c8e78572bee810699eab93d21a5a75a",
+  "prev": "f1a086690c5b3faea5b5b63b37c6e055b1274aae",
+  "head": "6de9f4373ed26bd0a9198ef152ff979541f602fe",
   "applied": [
     "fuse-support-copying-large",
     "fuse-support-large-folios-for",
@@ -9,13 +9,14 @@
     "fuse-support-large-folios-for-1",
     "fuse-support-large-folios-for-2",
     "fuse-support-large-folios-for-3",
-    "fuse-support-large-folios-for-4",
+    "fuse-support-large-folios-for-4"
+  ],
+  "unapplied": [
     "fuse-support-large-folios-for-5",
     "fuse-support-large-folios-for-6",
     "fuse-optimize-direct-io-large",
     "fuse-support-large-folios-for-7"
   ],
-  "unapplied": [],
   "hidden": [],
   "patches": {
     "fuse-optimize-direct-io-large": {
