@@ -66,6 +66,9 @@ struct fuse_ring_queue {
 	/* queue id, corresponds to the cpu core */
 	unsigned int qid;
 
+	/* NUMA node this queue belongs to */
+	int numa_node;
+
 	/*
 	 * queue lock, taken when any value in the queue changes _and_ also
 	 * a ring entry state changes.
@@ -109,13 +112,20 @@ struct fuse_ring {
 	/* back pointer */
 	struct fuse_conn *fc;
 
-	/* number of ring queues */
+	/* number of ring queues per NUMA node */
 	size_t nr_queues;
+
+	/* number of NUMA nodes */
+	int nr_numa_nodes;
 
 	/* maximum payload/arg size */
 	size_t max_payload_sz;
 
-	struct fuse_ring_queue **queues;
+	/* queues organized by NUMA node and queue index */
+	struct fuse_ring_queue ***numa_queues;
+
+	/* mapping from qid (corresponding to cpu id) to numa node queue index */
+	int *node_q_id_map;
 
 	/*
 	 * Log ring entry states on stop when entries cannot be released
