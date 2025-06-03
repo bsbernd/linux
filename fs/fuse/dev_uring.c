@@ -17,7 +17,7 @@ MODULE_PARM_DESC(enable_uring,
 		 "Enable userspace communication through io-uring");
 
 #define FUSE_URING_IOV_SEGS 2 /* header and payload */
-
+#define FUSE_URING_QUEUE_THRESHOLD 5
 
 bool fuse_uring_enabled(void)
 {
@@ -545,7 +545,6 @@ static void fuse_uring_async_stop_queues(struct work_struct *work)
 
 	/*
 	 * Some ring entries might be in the middle of IO operations,
-	 * i.e. in process to get handled by file_operations::uring_cmd
 	 * or on the way to userspace - we could handle that with conditions in
 	 * run time code, but easier/cleaner to have an async tear down handler
 	 * If there are still queue references left
@@ -1324,22 +1323,89 @@ static void fuse_uring_send_in_task(struct io_uring_cmd *cmd,
 	fuse_uring_send(ent, cmd, err, issue_flags);
 }
 
-static struct fuse_ring_queue *fuse_uring_task_to_queue(struct fuse_ring *ring)
+/*
+ * Get the best queue for the current CPU
+ * XXX: The loop approach is expensive, use busy/idle bitmaps?
+ */
+static struct fuse_ring_queue *fuse_uring_get_queue(struct fuse_ring *ring)
 {
-	unsigned int qid;
+	unsigned int cpu;
 	struct fuse_ring_queue *queue;
+	struct fuse_ring_queue *best_queue = NULL;
+	unsigned int min_reqs = UINT_MAX;
+	int local_node, node_cpu, node;
 
-	qid = task_cpu(current);
+	/* First try current CPU's queue */
+	cpu = task_cpu(current);
+	local_node = cpu_to_node(cpu);
 
-	if (WARN_ONCE(qid >= ring->nr_queues,
-		      "Core number (%u) exceeds nr queues (%zu)\n", qid,
-		      ring->nr_queues))
-		qid = 0;
+	if (WARN_ON_ONCE(local_node >= ring->nr_numa_nodes))
+		local_node = 0;
 
-	queue = fuse_uring_qid_to_queue(ring, qid);
-	WARN_ONCE(!queue, "Missing queue for qid %d\n", qid);
+	queue = fuse_uring_qid_to_queue(ring, cpu);
+	if (queue) {
+		/* Fast path: if current CPU's queue has few requests, use it */
+		if (queue->nr_reqs < FUSE_URING_QUEUE_THRESHOLD)
+			return queue;
 
-	return queue;
+		/* Otherwise, remember it as our initial best option */
+		best_queue = queue;
+		min_reqs = queue->nr_reqs;
+	}
+
+	/* Start with current CPU's node */
+	local_node = numa_node_id();
+
+	/* Second pass: try other queues on the local node */
+	for_each_cpu(node_cpu, cpumask_of_node(local_node)) {
+		/* Skip the current CPU which we already checked */
+		if (node_cpu == cpu)
+			continue;
+
+		queue = fuse_uring_qid_to_queue(ring, node_cpu);
+		if (!queue)
+			continue;
+
+		if (READ_ONCE(queue->nr_reqs) <= min_reqs) {
+			min_reqs = READ_ONCE(queue->nr_reqs);
+			best_queue = queue;
+
+			/* Fast path: empty queue on local node is ideal */
+			if (min_reqs == 0)
+				return best_queue;
+		}
+	}
+
+	/* If we found a reasonably loaded queue on local node, use it */
+	if (best_queue && min_reqs <= FUSE_URING_QUEUE_THRESHOLD)
+		return best_queue;
+
+	/* Prefer local over remote numa nodes */
+	min_reqs += FUSE_URING_QUEUE_THRESHOLD;
+
+	/* Third pass: check other nodes if local node is busy */
+	for (node = 0; node < ring->nr_numa_nodes; node++) {
+		if (node == local_node)
+			continue;
+
+		for_each_cpu(node_cpu, cpumask_of_node(node)) {
+			queue = fuse_uring_qid_to_queue(ring, node_cpu);
+			if (!queue)
+				continue;
+
+			if (READ_ONCE(queue->nr_reqs) <= min_reqs) {
+				min_reqs = READ_ONCE(queue->nr_reqs);
+				best_queue = queue;
+
+				/* Fast path: almost empty queue is good enough */
+				if (min_reqs <= FUSE_URING_QUEUE_THRESHOLD)
+					return best_queue;
+			}
+		}
+	}
+
+	WARN_ON_ONCE(!best_queue);
+	return best_queue;
 }
 
 static void fuse_uring_dispatch_ent(struct fuse_ring_ent *ent)
@@ -1360,7 +1426,7 @@ void fuse_uring_queue_fuse_req(struct fuse_iqueue *fiq, struct fuse_req *req)
 	int err;
 
 	err = -EINVAL;
-	queue = fuse_uring_task_to_queue(ring);
+	queue = fuse_uring_get_queue(ring);
 	if (!queue)
 		goto err;
 
@@ -1405,7 +1471,7 @@ bool fuse_uring_queue_bq_req(struct fuse_req *req)
 	struct fuse_ring_queue *queue;
 	struct fuse_ring_ent *ent = NULL;
 
-	queue = fuse_uring_task_to_queue(ring);
+	queue = fuse_uring_get_queue(ring);
 	if (!queue)
 		return false;
 
