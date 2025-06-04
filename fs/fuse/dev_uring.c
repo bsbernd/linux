@@ -268,15 +268,17 @@ static int fuse_uring_init_q_map(struct fuse_queue_map *q_map, size_t nr_cpu)
 
 	q_map->cpu_to_qid = kcalloc(nr_cpu, sizeof(*q_map->cpu_to_qid),
 				    GFP_KERNEL_ACCOUNT);
+	if (!q_map->cpu_to_qid)
+		return -ENOMEM;
 
 	return 0;
 }
 
-static int fuse_uring_create_q_masks(struct fuse_ring *ring)
+static int fuse_uring_create_q_masks(struct fuse_ring *ring, size_t nr_queues)
 {
 	int err, node;
 
-	err = fuse_uring_init_q_map(&ring->q_map, ring->max_nr_queues);
+	err = fuse_uring_init_q_map(&ring->q_map, nr_queues);
 	if (err)
 		return err;
 
@@ -287,7 +289,7 @@ static int fuse_uring_create_q_masks(struct fuse_ring *ring)
 		return -ENOMEM;
 	for (node = 0; node < ring->nr_numa_nodes; node++) {
 		err = fuse_uring_init_q_map(&ring->numa_q_map[node],
-					   ring->max_nr_queues);
+					    nr_queues);
 		if (err)
 			return err;
 	}
@@ -319,7 +321,7 @@ static struct fuse_ring *fuse_uring_create(struct fuse_conn *fc)
 	max_payload_size = max(FUSE_MIN_READ_BUFFER, fc->max_write);
 	max_payload_size = max(max_payload_size, fc->max_pages * PAGE_SIZE);
 
-	err = fuse_uring_create_q_masks(ring);
+	err = fuse_uring_create_q_masks(ring, nr_queues);
 	if (err)
 		goto out_err;
 
@@ -348,12 +350,37 @@ out_err:
 	return res;
 }
 
+static void fuse_uring_cpu_qid_mapping(struct fuse_ring *ring, int qid,
+				       struct fuse_queue_map *q_map)
+{
+	int cpu, qid_idx;
+	size_t nr_queues;
+
+	cpumask_set_cpu(qid, q_map->registered_q_mask);
+	nr_queues = cpumask_weight(q_map->registered_q_mask);
+	for (cpu = 0; cpu < ring->max_nr_queues; cpu++) {
+		if (!q_map->cpu_to_qid)
+			return;
+
+		/*
+		 * Position of this CPU within the registered queue mask,
+		 * handles non-contiguous CPU distributions across NUMA nodes.
+		 */
+		qid_idx = bitmap_weight(
+				cpumask_bits(q_map->registered_q_mask), cpu);
+
+		q_map->cpu_to_qid[cpu] = cpumask_nth(qid_idx % nr_queues,
+						     q_map->registered_q_mask);
+	}
+}
+
 static struct fuse_ring_queue *fuse_uring_create_queue(struct fuse_ring *ring,
 						       int qid)
 {
 	struct fuse_conn *fc = ring->fc;
 	struct fuse_ring_queue *queue;
 	struct list_head *pq;
+	int node;
 
 	queue = kzalloc(sizeof(*queue), GFP_KERNEL_ACCOUNT);
 	if (!queue)
@@ -391,6 +418,22 @@ static struct fuse_ring_queue *fuse_uring_create_queue(struct fuse_ring *ring,
 	 * write_once and lock as the caller mostly doesn't take the lock at all
 	 */
 	WRITE_ONCE(ring->queues[qid], queue);
+
+	/* Static mapping from cpu to per numa queues */
+	node = cpu_to_node(qid);
+	fuse_uring_cpu_qid_mapping(ring, qid, &ring->numa_q_map[node]);
+
+	/*
+	 * smp_store_release, as the variable is read without fc->lock and
+	 * we need to avoid compiler re-ordering of updating the nr_queues
+	 * and setting ring->numa_queues[node].cpu_to_qid above
+	 */
+	smp_store_release (&ring->numa_q_map[node].nr_queues,
+			   ring->numa_q_map[node].nr_queues + 1);
+
+	/* global mapping */
+	fuse_uring_cpu_qid_mapping(ring, qid, &ring->q_map);
+
 	spin_unlock(&fc->lock);
 
 	return queue;
@@ -1115,31 +1158,6 @@ static int fuse_uring_commit_fetch(struct io_uring_cmd *cmd, int issue_flags,
 	return 0;
 }
 
-static bool is_ring_ready(struct fuse_ring *ring, int current_qid)
-{
-	int qid;
-	struct fuse_ring_queue *queue;
-	bool ready = true;
-
-	for (qid = 0; qid < ring->max_nr_queues && ready; qid++) {
-		if (current_qid == qid)
-			continue;
-
-		queue = ring->queues[qid];
-		if (!queue) {
-			ready = false;
-			break;
-		}
-
-		spin_lock(&queue->lock);
-		if (list_empty(&queue->ent_avail_queue))
-			ready = false;
-		spin_unlock(&queue->lock);
-	}
-
-	return ready;
-}
-
 /*
  * fuse_uring_req_fetch command handling
  */
@@ -1164,13 +1182,9 @@ static void fuse_uring_do_register(struct fuse_ring_ent *ent,
 	spin_unlock(&queue->lock);
 
 	if (!ring->ready) {
-		bool ready = is_ring_ready(ring, queue->qid);
-
-		if (ready) {
-			WRITE_ONCE(fiq->ops, &fuse_io_uring_ops);
-			WRITE_ONCE(ring->ready, true);
-			wake_up_all(&fc->blocked_waitq);
-		}
+		WRITE_ONCE(fiq->ops, &fuse_io_uring_ops);
+		WRITE_ONCE(ring->ready, true);
+		wake_up_all(&fc->blocked_waitq);
 	}
 }
 
@@ -1486,22 +1500,36 @@ static void fuse_uring_send_in_task(struct io_uring_cmd *cmd,
 	fuse_uring_send(ent, cmd, err, issue_flags);
 }
 
-static struct fuse_ring_queue *fuse_uring_task_to_queue(struct fuse_ring *ring)
+static struct fuse_ring_queue *fuse_uring_select_queue(struct fuse_ring *ring)
 {
 	unsigned int qid;
-	struct fuse_ring_queue *queue;
+	int node;
+	unsigned int nr_queues;
+	unsigned int cpu = task_cpu(current);
 
-	qid = task_cpu(current);
+	cpu = cpu % ring->max_nr_queues;
 
-	if (WARN_ONCE(qid >= ring->max_nr_queues,
-		      "Core number (%u) exceeds nr queues (%zu)\n", qid,
-		      ring->max_nr_queues))
-		qid = 0;
+	/* numa local registered queue bitmap */
+	node = cpu_to_node(cpu);
+	if (WARN_ONCE(node >= ring->nr_numa_nodes,
+		      "Node number (%d) exceeds nr nodes (%d)\n",
+		      node, ring->nr_numa_nodes)) {
+		node = 0;
+	}
 
-	queue = ring->queues[qid];
-	WARN_ONCE(!queue, "Missing queue for qid %d\n", qid);
+	nr_queues = READ_ONCE(ring->numa_q_map[node].nr_queues);
+	if (nr_queues) {
+		qid = ring->numa_q_map[node].cpu_to_qid[cpu];
+		if (WARN_ON_ONCE(qid >= ring->max_nr_queues))
+			return NULL;
+		return READ_ONCE(ring->queues[qid]);
+	}
 
-	return queue;
+	/* global registered queue bitmap */
+	qid = ring->q_map.cpu_to_qid[cpu];
+	if (WARN_ON_ONCE(qid >= ring->max_nr_queues))
+		return NULL;
+	return READ_ONCE(ring->queues[qid]);
 }
 
 static void fuse_uring_dispatch_ent(struct fuse_ring_ent *ent, bool bg)
@@ -1541,7 +1569,7 @@ void fuse_uring_queue_fuse_req(struct fuse_iqueue *fiq, struct fuse_req *req)
 	int err;
 
 	err = -EINVAL;
-	queue = fuse_uring_task_to_queue(ring);
+	queue = fuse_uring_select_queue(ring);
 	if (!queue)
 		goto err;
 
@@ -1583,7 +1611,7 @@ bool fuse_uring_queue_bq_req(struct fuse_req *req)
 	struct fuse_ring_queue *queue;
 	struct fuse_ring_ent *ent = NULL;
 
-	queue = fuse_uring_task_to_queue(ring);
+	queue = fuse_uring_select_queue(ring);
 	if (!queue)
 		return false;
 
