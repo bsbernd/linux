@@ -261,6 +261,25 @@ bool fuse_uring_request_expired(struct fuse_chan *fch)
 	return false;
 }
 
+static void fuse_uring_free_q_map(struct fuse_queue_map *q_map)
+{
+	free_cpumask_var(q_map->registered_q_mask);
+	kfree(q_map->cpu_to_qid);
+}
+
+static void fuse_uring_free_q_maps(struct fuse_queue_maps *maps)
+{
+	int node;
+
+	if (!maps)
+		return;
+
+	fuse_uring_free_q_map(&maps->global);
+	for (node = 0; node < nr_node_ids; node++)
+		fuse_uring_free_q_map(&maps->numa[node]);
+	kfree(maps);
+}
+
 void fuse_uring_destruct(struct fuse_chan *fch)
 {
 	struct fuse_ring *ring = fch->ring;
@@ -293,9 +312,83 @@ void fuse_uring_destruct(struct fuse_chan *fch)
 		WRITE_ONCE(ring->queues[qid], NULL);
 	}
 
+	fuse_uring_free_q_maps(ring->q_maps);
 	kfree(ring->queues);
 	kfree(ring);
 	fch->ring = NULL;
+}
+
+static int fuse_uring_alloc_q_map(struct fuse_queue_map *q_map)
+{
+	if (!zalloc_cpumask_var(&q_map->registered_q_mask, GFP_KERNEL_ACCOUNT))
+		return -ENOMEM;
+
+	q_map->cpu_to_qid = kzalloc_objs(*q_map->cpu_to_qid, nr_cpu_ids,
+					 GFP_KERNEL_ACCOUNT);
+	if (!q_map->cpu_to_qid)
+		return -ENOMEM;
+
+	return 0;
+}
+
+static struct fuse_queue_maps *fuse_uring_alloc_q_maps(void)
+{
+	struct fuse_queue_maps *maps;
+	int node;
+
+	maps = kzalloc_flex(*maps, numa, nr_node_ids, GFP_KERNEL_ACCOUNT);
+	if (!maps)
+		goto err;
+
+	if (fuse_uring_alloc_q_map(&maps->global))
+		goto err;
+
+	for (node = 0; node < nr_node_ids; node++) {
+		if (fuse_uring_alloc_q_map(&maps->numa[node]))
+			goto err;
+	}
+	return maps;
+err:
+	fuse_uring_free_q_maps(maps);
+	return NULL;
+}
+
+static int fuse_uring_cpu_to_node(int cpu)
+{
+	int node = 0;
+
+	/*
+	 * Userspace might not know that a CPU is not possible, or might not
+	 * care, and register a qid for it. cpu_to_node() is only defined for
+	 * possible CPUs, so such a queue goes to node 0.
+	 */
+	if (cpu_possible(cpu))
+		node = cpu_to_node(cpu);
+
+	/* a possible CPU that is not present can have no node */
+	if (node == NUMA_NO_NODE)
+		node = 0;
+
+	return node;
+}
+
+static void fuse_uring_cpu_qid_mapping(struct fuse_queue_map *q_map, int node)
+{
+	int cpu, qid_idx, mapping_count = 0;
+
+	q_map->nr_queues = cpumask_weight(q_map->registered_q_mask);
+	if (!q_map->nr_queues)
+		return;
+
+	for_each_possible_cpu(cpu) {
+		if (node != NUMA_NO_NODE && fuse_uring_cpu_to_node(cpu) != node)
+			continue;
+
+		qid_idx = mapping_count % q_map->nr_queues;
+		q_map->cpu_to_qid[cpu] = cpumask_nth(qid_idx,
+						     q_map->registered_q_mask);
+		mapping_count++;
+	}
 }
 
 /*
@@ -316,6 +409,25 @@ static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch)
 	if (!ring->queues)
 		goto out_err;
 
+	/*
+	 * Right would be nr_cpu_ids (qid = CPU id) to handle gaps in the CPU
+	 * ids, but since 6.14 the ring waits for a queue on every qid below
+	 * num_possible_cpus(). Changing it could result in existing
+	 * userspace never reaching the 'ready' state.
+	 */
+	ring->max_nr_queues = nr_queues;
+
+	/* Legacy behavior by default, one queue per cpu */
+	ring->q_maps = fuse_uring_alloc_q_maps();
+	if (!ring->q_maps)
+		goto out_err;
+	/* a qid that is not a possible CPU gets no requests */
+	cpumask_copy(ring->q_maps->global.registered_q_mask, cpu_possible_mask);
+	/* valid qids are 0...nr_queues - 1, not 0...nr_cpu_ids - 1 */
+	bitmap_clear(cpumask_bits(ring->q_maps->global.registered_q_mask),
+		     nr_queues, nr_cpu_ids - nr_queues);
+	fuse_uring_cpu_qid_mapping(&ring->q_maps->global, NUMA_NO_NODE);
+
 	max_payload_size = max(FUSE_MIN_READ_BUFFER, fch->max_write);
 	max_payload_size = max(max_payload_size, fch->max_pages * PAGE_SIZE);
 
@@ -327,7 +439,6 @@ static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch)
 
 	init_waitqueue_head(&ring->stop_waitq);
 
-	ring->max_nr_queues = nr_queues;
 	ring->chan = fch;
 	ring->max_payload_sz = max_payload_size;
 	smp_store_release(&fch->ring, ring);
@@ -336,6 +447,7 @@ static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch)
 	return ring;
 
 out_err:
+	fuse_uring_free_q_maps(ring->q_maps);
 	kfree(ring->queues);
 	kfree(ring);
 	return NULL;
