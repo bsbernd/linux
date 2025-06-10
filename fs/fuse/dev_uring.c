@@ -260,6 +260,25 @@ bool fuse_uring_request_expired(struct fuse_chan *fch)
 	return false;
 }
 
+static void fuse_uring_free_q_map(struct fuse_queue_map *q_map)
+{
+	free_cpumask_var(q_map->registered_q_mask);
+	kfree(q_map->cpu_to_qid);
+}
+
+static void fuse_uring_free_q_maps(struct fuse_queue_maps *maps)
+{
+	int node;
+
+	if (!maps)
+		return;
+
+	fuse_uring_free_q_map(&maps->global);
+	for (node = 0; node < nr_node_ids; node++)
+		fuse_uring_free_q_map(&maps->numa[node]);
+	kfree(maps);
+}
+
 void fuse_uring_destruct(struct fuse_chan *fch)
 {
 	struct fuse_ring *ring = fch->ring;
@@ -292,9 +311,94 @@ void fuse_uring_destruct(struct fuse_chan *fch)
 		WRITE_ONCE(ring->queues[qid], NULL);
 	}
 
+	fuse_uring_free_q_maps(ring->q_maps);
 	kfree(ring->queues);
 	kfree(ring);
 	fch->ring = NULL;
+}
+
+static int fuse_uring_alloc_q_map(struct fuse_queue_map *q_map)
+{
+	if (!zalloc_cpumask_var(&q_map->registered_q_mask, GFP_KERNEL_ACCOUNT))
+		return -ENOMEM;
+
+	q_map->cpu_to_qid = kzalloc_objs(*q_map->cpu_to_qid, nr_cpu_ids,
+					 GFP_KERNEL_ACCOUNT);
+	if (!q_map->cpu_to_qid)
+		return -ENOMEM;
+
+	return 0;
+}
+
+static struct fuse_queue_maps *fuse_uring_alloc_q_maps(void)
+{
+	struct fuse_queue_maps *maps, *result = NULL;
+	int node;
+
+	maps = kzalloc(struct_size(maps, numa, nr_node_ids),
+		       GFP_KERNEL_ACCOUNT);
+	if (!maps)
+		goto out;
+
+	if (fuse_uring_alloc_q_map(&maps->global))
+		goto out;
+
+	for (node = 0; node < nr_node_ids; node++) {
+		if (fuse_uring_alloc_q_map(&maps->numa[node]))
+			goto out;
+	}
+	result = maps;
+	maps = NULL;
+out:
+	fuse_uring_free_q_maps(maps);
+	return result;
+}
+
+static int fuse_uring_cpu_to_node(int cpu)
+{
+	int node = cpu_to_node(cpu);
+
+	/* a possible CPU that is not present can have no node */
+	if (node == NUMA_NO_NODE)
+		node = 0;
+
+	return node;
+}
+
+static void fuse_uring_cpu_qid_mapping(struct fuse_ring *ring,
+				       struct fuse_queue_map *q_map, int node)
+{
+	int cpu, qid_idx, mapping_count = 0;
+
+	q_map->nr_queues = cpumask_weight(q_map->registered_q_mask);
+	if (!q_map->nr_queues)
+		return;
+
+	for (cpu = 0; cpu < ring->max_nr_queues; cpu++) {
+		if (node != -1 && fuse_uring_cpu_to_node(cpu) != node)
+			continue;
+
+		qid_idx = mapping_count % q_map->nr_queues;
+		q_map->cpu_to_qid[cpu] = cpumask_nth(qid_idx,
+						     q_map->registered_q_mask);
+		mapping_count++;
+	}
+}
+
+static void fuse_uring_build_q_maps(struct fuse_ring *ring,
+				    struct fuse_queue_maps *maps)
+{
+	int node, registered_qid;
+
+	for_each_cpu(registered_qid, maps->global.registered_q_mask) {
+		node = fuse_uring_cpu_to_node(registered_qid);
+		cpumask_set_cpu(registered_qid,
+				maps->numa[node].registered_q_mask);
+	}
+
+	fuse_uring_cpu_qid_mapping(ring, &maps->global, -1);
+	for (node = 0; node < nr_node_ids; node++)
+		fuse_uring_cpu_qid_mapping(ring, &maps->numa[node], node);
 }
 
 /*
@@ -305,6 +409,7 @@ static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch)
 	struct fuse_ring *ring;
 	size_t nr_queues = num_possible_cpus();
 	size_t max_payload_size;
+	int qid;
 
 	ring = kzalloc_obj(*ring, GFP_KERNEL_ACCOUNT);
 	if (!ring)
@@ -314,6 +419,15 @@ static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch)
 				    GFP_KERNEL_ACCOUNT);
 	if (!ring->queues)
 		goto out_err;
+	ring->max_nr_queues = nr_queues;
+
+	/* Legacy behavior by default, one queue per cpu */
+	ring->q_maps = fuse_uring_alloc_q_maps();
+	if (!ring->q_maps)
+		goto out_err;
+	for (qid = 0; qid < nr_queues; qid++)
+		cpumask_set_cpu(qid, ring->q_maps->global.registered_q_mask);
+	fuse_uring_build_q_maps(ring, ring->q_maps);
 
 	max_payload_size = max(FUSE_MIN_READ_BUFFER, fch->max_write);
 	max_payload_size = max(max_payload_size, fch->max_pages * PAGE_SIZE);
@@ -326,7 +440,6 @@ static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch)
 
 	init_waitqueue_head(&ring->stop_waitq);
 
-	ring->max_nr_queues = nr_queues;
 	ring->chan = fch;
 	ring->max_payload_sz = max_payload_size;
 	smp_store_release(&fch->ring, ring);
@@ -335,6 +448,7 @@ static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch)
 	return ring;
 
 out_err:
+	fuse_uring_free_q_maps(ring->q_maps);
 	kfree(ring->queues);
 	kfree(ring);
 	return NULL;
