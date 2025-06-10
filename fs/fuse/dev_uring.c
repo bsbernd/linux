@@ -186,6 +186,25 @@ bool fuse_uring_request_expired(struct fuse_chan *fch)
 	return false;
 }
 
+static void fuse_ring_destruct_q_map(struct fuse_queue_map *q_map)
+{
+	free_cpumask_var(q_map->registered_q_mask);
+	kfree(q_map->cpu_to_qid);
+}
+
+static void fuse_uring_destruct_q_masks(struct fuse_ring *ring)
+{
+	int node;
+
+	fuse_ring_destruct_q_map(&ring->q_map);
+
+	if (ring->numa_q_map) {
+		for (node = 0; node < ring->nr_numa_nodes; node++)
+			fuse_ring_destruct_q_map(&ring->numa_q_map[node]);
+		kfree(ring->numa_q_map);
+	}
+}
+
 void fuse_uring_destruct(struct fuse_chan *fch)
 {
 	struct fuse_ring *ring = fch->ring;
@@ -217,9 +236,44 @@ void fuse_uring_destruct(struct fuse_chan *fch)
 		ring->queues[qid] = NULL;
 	}
 
+	fuse_uring_destruct_q_masks(ring);
 	kfree(ring->queues);
 	kfree(ring);
 	fch->ring = NULL;
+}
+
+static int fuse_uring_init_q_map(struct fuse_queue_map *q_map, size_t nr_cpu)
+{
+	if (!zalloc_cpumask_var(&q_map->registered_q_mask, GFP_KERNEL_ACCOUNT))
+		return -ENOMEM;
+
+	q_map->cpu_to_qid = kzalloc_objs(*q_map->cpu_to_qid, nr_cpu,
+					 GFP_KERNEL_ACCOUNT);
+	if (!q_map->cpu_to_qid)
+		return -ENOMEM;
+
+	return 0;
+}
+
+static int fuse_uring_create_q_masks(struct fuse_ring *ring)
+{
+	int err, node;
+
+	err = fuse_uring_init_q_map(&ring->q_map, ring->max_nr_queues);
+	if (err)
+		return err;
+
+	ring->numa_q_map = kzalloc_objs(*ring->numa_q_map, ring->nr_numa_nodes,
+					GFP_KERNEL_ACCOUNT);
+	if (!ring->numa_q_map)
+		return -ENOMEM;
+	for (node = 0; node < ring->nr_numa_nodes; node++) {
+		err = fuse_uring_init_q_map(&ring->numa_q_map[node],
+					   ring->max_nr_queues);
+		if (err)
+			return err;
+	}
+	return 0;
 }
 
 /*
@@ -231,6 +285,7 @@ static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch)
 	size_t nr_queues = num_possible_cpus();
 	struct fuse_ring *res = NULL;
 	size_t max_payload_size;
+	int err;
 
 	ring = kzalloc_obj(*ring, GFP_KERNEL_ACCOUNT);
 	if (!ring)
@@ -241,8 +296,14 @@ static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch)
 	if (!ring->queues)
 		goto out_err;
 
+	ring->nr_numa_nodes = num_online_nodes();
+
 	max_payload_size = max(FUSE_MIN_READ_BUFFER, fch->max_write);
 	max_payload_size = max(max_payload_size, fch->max_pages * PAGE_SIZE);
+
+	err = fuse_uring_create_q_masks(ring);
+	if (err)
+		goto out_err;
 
 	spin_lock(&fch->lock);
 	if (fch->ring) {
@@ -263,6 +324,7 @@ static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch)
 	return ring;
 
 out_err:
+	fuse_uring_destruct_q_masks(ring);
 	kfree(ring->queues);
 	kfree(ring);
 	return res;
@@ -475,7 +537,16 @@ static void fuse_uring_async_stop_queues(struct work_struct *work)
  */
 void fuse_uring_stop_queues(struct fuse_ring *ring)
 {
+	int node;
+
 	fuse_uring_teardown_all_queues(ring);
+
+	/* Reset all queue masks, we won't process any more IO */
+	cpumask_clear(ring->q_map.registered_q_mask);
+	for (node = 0; node < ring->nr_numa_nodes; node++) {
+		if (ring->numa_q_map)
+			cpumask_clear(ring->numa_q_map[node].registered_q_mask);
+	}
 
 	if (atomic_read(&ring->queue_refs) > 0) {
 		ring->teardown_time = jiffies;
