@@ -66,6 +66,9 @@ struct fuse_ring_queue {
 	/* queue id, corresponds to the cpu core */
 	unsigned int qid;
 
+	/* NUMA node this queue belongs to */
+	int numa_node;
+
 	/*
 	 * queue lock, taken when any value in the queue changes _and_ also
 	 * a ring entry state changes.
@@ -115,6 +118,9 @@ struct fuse_ring {
 	/* number of ring queues */
 	size_t max_nr_queues;
 
+	/* number of numa nodes */
+	int nr_numa_nodes;
+
 	/* maximum payload/arg size */
 	size_t max_payload_sz;
 
@@ -125,6 +131,18 @@ struct fuse_ring {
 	 */
 	unsigned int stop_debug_log : 1;
 
+	/* Tracks which queues are available (empty) globally */
+	cpumask_var_t avail_q_mask;
+
+	/* Tracks which queues are available per NUMA node */
+	cpumask_var_t *per_numa_avail_q_mask;
+
+	/* Tracks which queues are registered */
+	cpumask_var_t registered_q_mask;
+
+	/* Tracks which queues are registered per NUMA node */
+	cpumask_var_t *numa_registered_q_mask;
+
 	wait_queue_head_t stop_waitq;
 
 	/* async tear down */
@@ -134,6 +152,9 @@ struct fuse_ring {
 	unsigned long teardown_time;
 
 	atomic_t queue_refs;
+
+	/* Number of CPUs per node */
+	int *numa_domain_size;
 
 	bool ready;
 };
