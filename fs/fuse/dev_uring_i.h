@@ -161,8 +161,8 @@ struct fuse_ring {
 	/* back pointer */
 	struct fuse_chan *chan;
 
-	/* number of ring queues */
-	size_t nr_queues;
+	/* max number of ring queues */
+	size_t max_nr_queues;
 
 	/* maximum payload/arg size */
 	size_t max_payload_sz;
