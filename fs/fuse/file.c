@@ -7,6 +7,7 @@
 */
 
 #include "fuse_i.h"
+#include "fuse_dlm_cache.h"
 
 #include <linux/pagemap.h>
 #include <linux/slab.h>
@@ -1434,6 +1435,27 @@ static ssize_t fuse_cache_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		if (!fc->handle_killpriv_v2 ||
 		    !setattr_should_drop_suidgid(idmap, file_inode(file)))
 			writeback = true;
+
+		/*
+		 * If we have dlm support acquire the lock for the area
+		 * we are writing into.
+		 */
+		if (fc->dlm) {
+			/*
+			 * Note that a file opened with O_APPEND will have
+			 * relative values in ki_pos. This code is here for
+			 * convenience and for libfuse overlay test.
+			 * Filesystems should handle O_APPEND with 'direct io'
+			 * to additionally get the performance benefits of
+			 * 'parallel direct writes'.
+			 */
+			loff_t pos = file->f_flags & O_APPEND ?
+				     i_size_read(inode) + iocb->ki_pos :
+				     iocb->ki_pos;
+			size_t length = iov_iter_count(from);
+
+			fuse_get_dlm_write_lock(file, pos, length);
+		}
 	}
 
 	inode_lock(inode);
@@ -1453,7 +1475,7 @@ static ssize_t fuse_cache_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		if (written < 0 || !iov_iter_count(from))
 			goto out;
 		written = direct_write_fallback(iocb, from, written,
-				fuse_perform_write(iocb, from));
+						fuse_perform_write(iocb, from));
 	} else if (writeback) {
 		/*
 		 * Use iomap so that we can do granular uptodate reads
@@ -3119,6 +3141,7 @@ void fuse_init_file_inode(struct inode *inode, unsigned int flags)
 
 	INIT_LIST_HEAD(&fi->write_files);
 	INIT_LIST_HEAD(&fi->queued_writes);
+	fuse_dlm_cache_init(fi);
 	fi->writectr = 0;
 	fi->iocachectr = 0;
 	init_waitqueue_head(&fi->page_waitq);

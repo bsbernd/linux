@@ -7,6 +7,7 @@
 */
 
 #include "fuse_i.h"
+#include "fuse_dlm_cache.h"
 #include "dev_uring_i.h"
 
 #include <linux/dax.h>
@@ -194,6 +195,7 @@ static void fuse_evict_inode(struct inode *inode)
 		WARN_ON(fi->iocachectr != 0);
 		WARN_ON(!list_empty(&fi->write_files));
 		WARN_ON(!list_empty(&fi->queued_writes));
+		fuse_dlm_cache_release_locks(fi);
 	}
 }
 
@@ -621,6 +623,14 @@ int fuse_reverse_inval_inode(struct fuse_conn *fc, u64 nodeid,
 			pg_end = -1;
 		else
 			pg_end = (offset + len - 1) >> PAGE_SHIFT;
+
+		if (fc->dlm && fc->writeback_cache)
+			/* invalidate the range from the beginning of the first page
+			 * in the given range to the last byte of the last page */
+			fuse_dlm_unlock_range(fi,
+								pg_start << PAGE_SHIFT,
+								(pg_end << PAGE_SHIFT) | (PAGE_SIZE - 1));
+
 		invalidate_inode_pages2_range(inode->i_mapping,
 					      pg_start, pg_end);
 	}
@@ -1022,6 +1032,7 @@ void fuse_conn_init(struct fuse_conn *fc, struct fuse_mount *fm,
 	fc->blocked = 0;
 	fc->initialized = 0;
 	fc->connected = 1;
+	fc->dlm = 1;
 	atomic64_set(&fc->attr_version, 1);
 	atomic64_set(&fc->evict_ctr, 1);
 	get_random_bytes(&fc->scramble_key, sizeof(fc->scramble_key));
