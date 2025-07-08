@@ -758,6 +758,12 @@ struct fuse_conn {
 	 */
 	unsigned handle_killpriv_v2:1;
 
+	/*  invalidate inode entries when doing inode invalidation */
+	unsigned inval_inode_entries:1;
+
+	/*  expire inode entries when doing inode invalidation */
+	unsigned expire_inode_entries:1;
+
 	/*
 	 * The following bitfields are only for optimization purposes
 	 * and hence races in setting them will not cause malfunction

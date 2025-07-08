@@ -552,6 +552,45 @@ struct inode *fuse_ilookup(struct fuse_conn *fc, u64 nodeid,
 	return NULL;
 }
 
+static void fuse_prune_aliases(struct inode *inode)
+{
+	struct dentry *dentry;
+
+	spin_lock(&inode->i_lock);
+	hlist_for_each_entry(dentry, &inode->i_dentry, d_u.d_alias) {
+		fuse_invalidate_entry_cache(dentry);
+	}
+	spin_unlock(&inode->i_lock);
+
+	d_prune_aliases(inode);
+}
+
+static void fuse_invalidate_inode_entry(struct inode *inode)
+{
+	struct dentry *dentry;
+
+	if (S_ISDIR(inode->i_mode)) {
+		/* For directories, use d_invalidate to handle children and submounts */
+		dentry = d_find_alias(inode);
+		if (dentry) {
+			d_invalidate(dentry);
+			fuse_invalidate_entry_cache(dentry);
+			dput(dentry);
+		}
+	} else {
+		/* For regular files, just unhash the dentry */
+		spin_lock(&inode->i_lock);
+		hlist_for_each_entry(dentry, &inode->i_dentry, d_u.d_alias) {
+			spin_lock(&dentry->d_lock);
+			if (!d_unhashed(dentry))
+				__d_drop(dentry);
+			spin_unlock(&dentry->d_lock);
+			fuse_invalidate_entry_cache(dentry);
+		}
+		spin_unlock(&inode->i_lock);
+	}
+}
+
 int fuse_reverse_inval_inode(struct fuse_conn *fc, u64 nodeid,
 			     loff_t offset, loff_t len)
 {
@@ -568,6 +607,11 @@ int fuse_reverse_inval_inode(struct fuse_conn *fc, u64 nodeid,
 	spin_lock(&fi->lock);
 	fi->attr_version = atomic64_inc_return(&fc->attr_version);
 	spin_unlock(&fi->lock);
+
+	if (fc->inval_inode_entries)
+		fuse_invalidate_inode_entry(inode);
+	else if (fc->expire_inode_entries)
+		fuse_prune_aliases(inode);
 
 	fuse_invalidate_attr(inode);
 	forget_all_cached_acls(inode);
@@ -1441,6 +1485,10 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 
 			if (flags & FUSE_REQUEST_TIMEOUT)
 				timeout = arg->request_timeout;
+			if (flags & FUSE_INVAL_INODE_ENTRY)
+				fc->inval_inode_entries = 1;
+			if (flags & FUSE_EXPIRE_INODE_ENTRY)
+				fc->expire_inode_entries = 1;
 		} else {
 			ra_pages = fc->max_read / PAGE_SIZE;
 			fc->no_lock = 1;
@@ -1491,7 +1539,7 @@ void fuse_send_init(struct fuse_mount *fm)
 		FUSE_SECURITY_CTX | FUSE_CREATE_SUPP_GROUP |
 		FUSE_HAS_EXPIRE_ONLY | FUSE_DIRECT_IO_ALLOW_MMAP |
 		FUSE_NO_EXPORT_SUPPORT | FUSE_HAS_RESEND | FUSE_ALLOW_IDMAP |
-		FUSE_REQUEST_TIMEOUT;
+		FUSE_REQUEST_TIMEOUT | FUSE_INVAL_INODE_ENTRY | FUSE_EXPIRE_INODE_ENTRY;
 #ifdef CONFIG_FUSE_DAX
 	if (fm->fc->dax)
 		flags |= FUSE_MAP_ALIGNMENT;
