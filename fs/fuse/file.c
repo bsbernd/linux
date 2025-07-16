@@ -2283,6 +2283,57 @@ static void fuse_vma_close(struct vm_area_struct *vma)
 	mapping_set_error(vma->vm_file->f_mapping, err);
 }
 
+/**
+ * Request a DLM lock from the FUSE server.
+ *
+ * This routine is similar to fuse_get_dlm_write_lock(), but it
+ * does not cache the DLM lock in the kernel.
+ */
+static int fuse_get_page_mkwrite_lock(struct file *file, loff_t offset, size_t length)
+{
+	struct fuse_file *ff = file->private_data;
+	struct inode *inode = file_inode(file);
+	struct fuse_conn *fc = get_fuse_conn(inode);
+	struct fuse_mount *fm = ff->fm;
+
+	FUSE_ARGS(args);
+	struct fuse_dlm_lock_in inarg;
+	struct fuse_dlm_lock_out outarg;
+	int err;
+
+	if (WARN_ON_ONCE((offset & ~PAGE_MASK) || (length & ~PAGE_MASK)))
+		return -EIO;
+
+	memset(&inarg, 0, sizeof(inarg));
+	inarg.fh = ff->fh;
+
+	inarg.offset = offset;
+	inarg.size = length;
+	inarg.type = FUSE_DLM_PAGE_MKWRITE;
+
+	args.opcode = FUSE_DLM_WB_LOCK;
+	args.nodeid = get_node_id(inode);
+	args.in_numargs = 1;
+	args.in_args[0].size = sizeof(inarg);
+	args.in_args[0].value = &inarg;
+	args.out_numargs = 1;
+	args.out_args[0].size = sizeof(outarg);
+	args.out_args[0].value = &outarg;
+	err = fuse_simple_request(fm, &args);
+	if (err == -ENOSYS) {
+		fc->dlm = 0;
+		err = 0;
+	}
+
+	if (!err && outarg.locksize < length) {
+		/* fuse server is seriously broken */
+		pr_warn("fuse: dlm lock request for %lu bytes returned %u bytes\n",
+			length, outarg.locksize);
+		fuse_abort_conn(fc);
+		err = -EINVAL;
+	}
+	return err;
+}
 /*
  * Wait for writeback against this page to complete before allowing it
  * to be marked dirty again, and hence written back again, possibly
@@ -2301,7 +2352,18 @@ static void fuse_vma_close(struct vm_area_struct *vma)
 static vm_fault_t fuse_page_mkwrite(struct vm_fault *vmf)
 {
 	struct folio *folio = page_folio(vmf->page);
-	struct inode *inode = file_inode(vmf->vma->vm_file);
+	struct file *file = vmf->vma->vm_file;
+	struct inode *inode = file_inode(file);
+	struct fuse_mount *fm = get_fuse_mount(inode);
+
+	if (fm->fc->dlm) {
+		loff_t pos = vmf->pgoff << PAGE_SHIFT;
+		size_t length = PAGE_SIZE;
+		int err = fuse_get_page_mkwrite_lock(file, pos, length);
+		if (err < 0) {
+			return vmf_error(err);
+		}
+	}
 
 	file_update_time(vmf->vma->vm_file);
 	folio_lock(folio);
