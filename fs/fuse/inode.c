@@ -2047,6 +2047,7 @@ void fuse_conn_destroy(struct fuse_mount *fm)
 {
 	struct fuse_conn *fc = fm->fc;
 
+	fuse_flush_requests(fc, 30 * HZ);
 	if (fc->destroy)
 		fuse_send_destroy(fm);
 
