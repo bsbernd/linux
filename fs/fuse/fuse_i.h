@@ -1291,6 +1291,12 @@ void fuse_wait_aborted(struct fuse_conn *fc);
 void fuse_check_timeout(struct work_struct *work);
 
 /**
+ * Flush all pending requests and wait for them.  Takes an optional timeout
+ * in jiffies.
+ */
+void fuse_flush_requests(struct fuse_conn *fc, unsigned long timeout);
+
+/**
  * Invalidate inode attributes
  */
 

@@ -24,6 +24,7 @@
 #include <linux/splice.h>
 #include <linux/sched.h>
 #include <linux/seq_file.h>
+#include <linux/nmi.h>
 
 #define CREATE_TRACE_POINTS
 #include "fuse_trace.h"
@@ -2396,6 +2397,43 @@ static void end_polls(struct fuse_conn *fc)
 
 		p = rb_next(p);
 	}
+}
+
+/*
+ * Flush all pending requests and wait for them.  Only call this function when
+ * it is no longer possible for other threads to add requests.
+ */
+void fuse_flush_requests(struct fuse_conn *fc, unsigned long timeout)
+{
+	unsigned long deadline;
+
+	spin_lock(&fc->lock);
+	if (!fc->connected) {
+		spin_unlock(&fc->lock);
+		return;
+	}
+
+	/* Push all the background requests to the queue. */
+	spin_lock(&fc->bg_lock);
+	fc->blocked = 0;
+	fc->max_background = UINT_MAX;
+	flush_bg_queue(fc);
+	spin_unlock(&fc->bg_lock);
+	spin_unlock(&fc->lock);
+
+	/*
+	 * Wait 30s for all the events to complete or abort.  Touch the
+	 * watchdog once per second so that we don't trip the hangcheck timer
+	 * while waiting for the fuse server.
+	 */
+	deadline = jiffies + timeout;
+	smp_mb();
+	while (fc->connected &&
+	       (!timeout || time_before(jiffies, deadline)) &&
+	       wait_event_timeout(fc->blocked_waitq,
+			!fc->connected || atomic_read(&fc->num_waiting) == 0,
+			HZ) == 0)
+		touch_softlockup_watchdog();
 }
 
 /*
