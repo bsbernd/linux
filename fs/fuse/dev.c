@@ -2421,6 +2421,8 @@ void fuse_flush_requests(struct fuse_conn *fc, unsigned long timeout)
 	spin_unlock(&fc->bg_lock);
 	spin_unlock(&fc->lock);
 
+	fuse_uring_flush_bg(fc);
+
 	/*
 	 * Wait 30s for all the events to complete or abort.  Touch the
 	 * watchdog once per second so that we don't trip the hangcheck timer
