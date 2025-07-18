@@ -123,6 +123,9 @@ void fuse_uring_flush_bg(struct fuse_conn *fc)
 	struct fuse_ring_queue *queue;
 	struct fuse_ring *ring = fc->ring;
 
+	if (!ring)
+		return;
+
 	for (qid = 0; qid < ring->nr_queues; qid++) {
 		queue = READ_ONCE(ring->queues[qid]);
 		if (!queue)
