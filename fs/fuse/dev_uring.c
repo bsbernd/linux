@@ -47,7 +47,7 @@ static struct fuse_ring_ent *uring_cmd_to_ring_ent(struct io_uring_cmd *cmd)
 	return pdu->ent;
 }
 
-static void fuse_uring_flush_bg(struct fuse_ring_queue *queue)
+static void fuse_uring_flush_queue_bg(struct fuse_ring_queue *queue)
 {
 	struct fuse_ring *ring = queue->ring;
 	struct fuse_conn *fc = ring->fc;
@@ -88,7 +88,7 @@ static void fuse_uring_req_end(struct fuse_ring_ent *ent, struct fuse_req *req,
 	if (test_bit(FR_BACKGROUND, &req->flags)) {
 		queue->active_background--;
 		spin_lock(&fc->bg_lock);
-		fuse_uring_flush_bg(queue);
+		fuse_uring_flush_queue_bg(queue);
 		spin_unlock(&fc->bg_lock);
 	}
 
@@ -117,11 +117,11 @@ static void fuse_uring_abort_end_queue_requests(struct fuse_ring_queue *queue)
 	fuse_dev_end_requests(&req_list);
 }
 
-void fuse_uring_abort_end_requests(struct fuse_ring *ring)
+void fuse_uring_flush_bg(struct fuse_conn *fc)
 {
 	int qid;
 	struct fuse_ring_queue *queue;
-	struct fuse_conn *fc = ring->fc;
+	struct fuse_ring *ring = fc->ring;
 
 	for (qid = 0; qid < ring->nr_queues; qid++) {
 		queue = READ_ONCE(ring->queues[qid]);
@@ -133,10 +133,9 @@ void fuse_uring_abort_end_requests(struct fuse_ring *ring)
 		WARN_ON_ONCE(ring->fc->max_background != UINT_MAX);
 		spin_lock(&queue->lock);
 		spin_lock(&fc->bg_lock);
-		fuse_uring_flush_bg(queue);
+		fuse_uring_flush_queue_bg(queue);
 		spin_unlock(&fc->bg_lock);
 		spin_unlock(&queue->lock);
-		fuse_uring_abort_end_queue_requests(queue);
 	}
 }
 
@@ -475,6 +474,7 @@ void fuse_uring_stop_queues(struct fuse_ring *ring)
 		if (!queue)
 			continue;
 
+		fuse_uring_abort_end_queue_requests(queue);
 		fuse_uring_teardown_entries(queue);
 	}
 
@@ -1326,7 +1326,7 @@ bool fuse_uring_queue_bq_req(struct fuse_req *req)
 	fc->num_background++;
 	if (fc->num_background == fc->max_background)
 		fc->blocked = 1;
-	fuse_uring_flush_bg(queue);
+	fuse_uring_flush_queue_bg(queue);
 	spin_unlock(&fc->bg_lock);
 
 	/*
