@@ -25,9 +25,6 @@ MODULE_PARM_DESC(enable_uring,
  */
 #define FUSE_URING_QUEUE_THRESHOLD 0
 
-static unsigned int fuse_uring_get_random_qid(struct fuse_ring *ring,
-					      const struct cpumask *mask);
-
 bool fuse_uring_enabled(void)
 {
 	return enable_uring;
@@ -243,6 +240,7 @@ void fuse_uring_destruct(struct fuse_conn *fc)
 
 	fuse_ring_destruct_q_masks(ring);
 	kfree(ring->queues);
+	kfree(ring->queue_mapping);
 	kfree(ring);
 	fc->ring = NULL;
 }
@@ -308,6 +306,12 @@ static struct fuse_ring *fuse_uring_create(struct fuse_conn *fc)
 	if (err)
 		goto out_err;
 
+	err = -ENOMEM;
+	ring->queue_mapping =
+		kcalloc(nr_queues, sizeof(int), GFP_KERNEL_ACCOUNT);
+	if (!ring->queue_mapping)
+		goto out_err;
+
 	spin_lock(&fc->lock);
 	if (fc->ring) {
 		/* race, another thread created the ring in the meantime */
@@ -329,6 +333,7 @@ static struct fuse_ring *fuse_uring_create(struct fuse_conn *fc)
 out_err:
 	fuse_ring_destruct_q_masks(ring);
 	kfree(ring->queues);
+	kfree(ring->queue_mapping);
 	kfree(ring);
 	return res;
 }
@@ -1070,6 +1075,54 @@ static bool is_ring_ready(struct fuse_ring *ring, int current_qid)
 	return ready;
 }
 
+static int fuse_uring_map_qid(int qid, const struct cpumask *mask)
+{
+	int nr_queues = cpumask_weight(mask);
+	int nth, cpu;
+
+	if (nr_queues == 0)
+		return -1;
+
+	nth = qid % nr_queues;
+	for_each_cpu(cpu, mask) {
+		if (nth-- == 0)
+			return cpu;
+	}
+
+	return -1;
+}
+
+static int fuse_uring_map_queues(struct fuse_ring *ring)
+{
+	int qid, mapped_qid, node;
+
+	for (qid = 0; qid < ring->max_nr_queues; qid++) {
+		node = cpu_to_node(qid);
+
+		/* First try to find a registered queue on the same NUMA node */
+		mapped_qid = fuse_uring_map_qid(
+			qid, ring->numa_registered_q_mask[node]);
+		if (mapped_qid < 0) {
+			/*
+			* No registered queue on this NUMA node,
+			 * use any registered queue
+			 */
+			mapped_qid = fuse_uring_map_qid(
+				qid, ring->registered_q_mask);
+		}
+
+		if (WARN_ON_ONCE(!ring->queues[mapped_qid])) {
+			pr_err("qid=%d mapped_qid=%d not created\n", qid,
+			       mapped_qid);
+			return -EINVAL;
+		}
+
+		WRITE_ONCE(ring->queue_mapping[qid], mapped_qid);
+	}
+
+	return 0;
+}
+
 /*
  * fuse_uring_req_fetch command handling
  */
@@ -1082,6 +1135,7 @@ static void fuse_uring_do_register(struct fuse_ring_ent *ent,
 	struct fuse_conn *fc = ring->fc;
 	struct fuse_iqueue *fiq = &fc->iq;
 	int node = queue->numa_node;
+	int err;
 
 	fuse_uring_prepare_cancel(cmd, issue_flags, ent);
 
@@ -1092,6 +1146,10 @@ static void fuse_uring_do_register(struct fuse_ring_ent *ent,
 
 	cpumask_set_cpu(queue->qid, ring->registered_q_mask);
 	cpumask_set_cpu(queue->qid, ring->numa_registered_q_mask[node]);
+
+	err = fuse_uring_map_queues(ring);
+	if (err)
+		return;
 
 	if (!ring->ready) {
 		bool ready = is_ring_ready(ring, queue->qid);
@@ -1349,63 +1407,29 @@ fuse_uring_get_first_queue(struct fuse_ring *ring, const struct cpumask *mask)
 }
 
 /*
- * Return a random queue from the registered queues mask
- *
- * Uses a deterministic but well-distributed algorithm to select
- * a random queue from the provided CPU mask.
- */
-static unsigned int fuse_uring_get_random_qid(struct fuse_ring *ring,
-					      const struct cpumask *mask)
-{
-	unsigned int nr_bits = cpumask_weight(mask);
-	unsigned int nth, cpu;
-
-	if (nr_bits == 0)
-		return UINT_MAX;
-
-	/* Fast path for single CPU */
-	if (nr_bits == 1)
-		return cpumask_first(mask);
-
-	/*
-	 * Use current jiffies and task PID to create a pseudo-random
-	 * but well-distributed selection that varies across calls
-	 */
-	nth = (get_random_u32() ^ (jiffies & 0xFFFF) ^
-	       (current->pid & 0xFFFF)) %
-	      nr_bits;
-
-	/* Find the CPU at that position */
-	for_each_cpu(cpu, mask) {
-		if (nth-- == 0)
-			return cpu;
-	}
-
-	return UINT_MAX;
-}
-
-/*
  * Get the best queue for the current CPU
  */
 static struct fuse_ring_queue *fuse_uring_get_queue(struct fuse_ring *ring)
 {
-	unsigned int qid;
-	struct fuse_ring_queue *queue, *local_queue = NULL;
+	unsigned int mapped_qid;
+	struct fuse_ring_queue *queue;
 	int local_node;
 	struct cpumask *mask;
-	struct fuse_conn *fc = ring->fc;
+	unsigned int core = task_cpu(current);
 
-	qid = task_cpu(current);
-	local_node = cpu_to_node(qid);
+	local_node = cpu_to_node(core);
 	if (WARN_ON_ONCE(local_node >= ring->nr_numa_nodes || local_node < 0))
 		local_node = 0;
 
+	if (WARN_ON_ONCE(core > ring->max_nr_queues))
+		core = 0;
+
+	mapped_qid = READ_ONCE(ring->queue_mapping[core]);
+	queue = ring->queues[mapped_qid];
+
 	/* First check if current CPU's queue is available */
-	if (qid < ring->max_nr_queues) {
-		local_queue = queue = ring->queues[qid];
-		if (queue && queue->nr_reqs <= FUSE_URING_QUEUE_THRESHOLD)
-			return queue;
-	}
+	if (queue->nr_reqs <= FUSE_URING_QUEUE_THRESHOLD)
+		return queue;
 
 	/* Second check if there are any available queues on the local node */
 	mask = ring->per_numa_avail_q_mask[local_node];
@@ -1418,23 +1442,10 @@ static struct fuse_ring_queue *fuse_uring_get_queue(struct fuse_ring *ring)
 	if (queue)
 		return queue;
 
-	/* No free queue, use the local queue if it exists */
-	if (local_queue)
-		return local_queue;
+	/* no better queue available, use the mapped queue */
+	queue = ring->queues[mapped_qid];
 
-	/* Try to use a random queue from the local NUMA node, if there is one */
-	mask = ring->numa_registered_q_mask[local_node];
-	qid = fuse_uring_get_random_qid(ring, mask);
-	if (qid < ring->max_nr_queues)
-		return ring->queues[qid];
-
-	/* Finally, use a random queue among all queues that are registered */
-	qid = fuse_uring_get_random_qid(ring, ring->registered_q_mask);
-	if (qid < ring->max_nr_queues)
-		return ring->queues[qid];
-
-	WARN_ON_ONCE(fc->connected);
-	return NULL;
+	return queue;
 }
 
 static void fuse_uring_dispatch_ent(struct fuse_ring_ent *ent)
