@@ -625,11 +625,14 @@ int fuse_reverse_inval_inode(struct fuse_conn *fc, u64 nodeid,
 			pg_end = (offset + len - 1) >> PAGE_SHIFT;
 
 		if (fc->dlm && fc->writeback_cache)
-			/* invalidate the range from the beginning of the first page
-			 * in the given range to the last byte of the last page */
+			/* Invalidate the range exactly as the fuse server requested
+			 * except for the case where it sends -1.
+			 * Note that this can lead to some inconsistencies if
+			 * the fuse server sends unaligned data */
 			fuse_dlm_unlock_range(fi,
-								pg_start << PAGE_SHIFT,
-								(pg_end << PAGE_SHIFT) | (PAGE_SIZE - 1));
+								offset,
+								pg_end == -1 ? 0 :
+								(offset + len - 1));
 
 		invalidate_inode_pages2_range(inode->i_mapping,
 					      pg_start, pg_end);

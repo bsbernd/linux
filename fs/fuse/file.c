@@ -2307,8 +2307,8 @@ static int fuse_get_page_mkwrite_lock(struct file *file, loff_t offset, size_t l
 	memset(&inarg, 0, sizeof(inarg));
 	inarg.fh = ff->fh;
 
-	inarg.offset = offset;
-	inarg.size = length;
+	inarg.start = offset;
+	inarg.end = offset + length - 1;
 	inarg.type = FUSE_DLM_PAGE_MKWRITE;
 
 	args.opcode = FUSE_DLM_WB_LOCK;
@@ -2325,10 +2325,13 @@ static int fuse_get_page_mkwrite_lock(struct file *file, loff_t offset, size_t l
 		err = 0;
 	}
 
-	if (!err && outarg.locksize < length) {
+	if (!err &&
+		fc->dlm &&
+		(outarg.start > inarg.start ||
+	    outarg.end < inarg.end)) {
 		/* fuse server is seriously broken */
-		pr_warn("fuse: dlm lock request for %lu bytes returned %u bytes\n",
-			length, outarg.locksize);
+		pr_warn("fuse: dlm lock request for %llu:%llu bytes returned %llu:%llu bytes\n",
+			inarg.start, inarg.end, outarg.start, outarg.end);
 		fuse_abort_conn(fc);
 		err = -EINVAL;
 	}

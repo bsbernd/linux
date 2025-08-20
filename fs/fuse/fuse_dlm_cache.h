@@ -32,16 +32,16 @@ int fuse_dlm_cache_init(struct fuse_inode *inode);
 void fuse_dlm_cache_release_locks(struct fuse_inode *inode);
 
 /* Lock a range of pages */
-int fuse_dlm_lock_range(struct fuse_inode *inode, pgoff_t start,
-			pgoff_t end, enum fuse_page_lock_mode mode);
+int fuse_dlm_lock_range(struct fuse_inode *inode, uint64_t start,
+			uint64_t end, enum fuse_page_lock_mode mode);
 
 /* Unlock a range of pages */
-int fuse_dlm_unlock_range(struct fuse_inode *inode, pgoff_t start,
-			  pgoff_t end);
+int fuse_dlm_unlock_range(struct fuse_inode *inode, uint64_t start,
+			  uint64_t end);
 
 /* Check if a page range is already locked */
-bool fuse_dlm_range_is_locked(struct fuse_inode *inode, pgoff_t start,
-			      pgoff_t end, enum fuse_page_lock_mode mode);
+bool fuse_dlm_range_is_locked(struct fuse_inode *inode, uint64_t start,
+			      uint64_t end, enum fuse_page_lock_mode mode);
 
 /* this is the interface to the filesystem */
 void fuse_get_dlm_write_lock(struct file *file, loff_t offset,

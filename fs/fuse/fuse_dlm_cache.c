@@ -16,11 +16,11 @@ struct fuse_dlm_range {
 	/* Interval tree node */
 	struct rb_node rb;
 	/* Start page offset (inclusive) */
-	pgoff_t start;
+	uint64_t start;
 	/* End page offset (inclusive) */
-	pgoff_t end;
+	uint64_t end;
 	/* Subtree end value for interval tree */
-	pgoff_t __subtree_end;
+	uint64_t __subtree_end;
 	/* Lock mode */
 	enum fuse_page_lock_mode mode;
 	/* Temporary list entry for operations */
@@ -32,19 +32,19 @@ struct fuse_dlm_range {
 #define FUSE_PCACHE_LK_WRITE 2 /* Exclusive write lock */
 
 /* Interval tree definitions for page ranges */
-static inline pgoff_t fuse_dlm_range_start(struct fuse_dlm_range *range)
+static inline uint64_t fuse_dlm_range_start(struct fuse_dlm_range *range)
 {
 	return range->start;
 }
 
-static inline pgoff_t fuse_dlm_range_last(struct fuse_dlm_range *range)
+static inline uint64_t fuse_dlm_range_last(struct fuse_dlm_range *range)
 {
 	return range->end;
 }
 
-INTERVAL_TREE_DEFINE(struct fuse_dlm_range, rb, pgoff_t, __subtree_end,
-		     fuse_dlm_range_start, fuse_dlm_range_last, static,
-		     fuse_page_it);
+INTERVAL_TREE_DEFINE(struct fuse_dlm_range, rb, uint64_t, __subtree_end,
+		    		fuse_dlm_range_start, fuse_dlm_range_last, static,
+		    		fuse_page_it);
 
 /**
  * fuse_page_cache_init - Initialize a page cache lock manager
@@ -101,8 +101,8 @@ void fuse_dlm_cache_release_locks(struct fuse_inode *inode)
  * Return: Pointer to the first overlapping range, or NULL if none found
  */
 static struct fuse_dlm_range *
-fuse_dlm_find_overlapping(struct fuse_dlm_cache *cache, pgoff_t start,
-			  pgoff_t end)
+fuse_dlm_find_overlapping(struct fuse_dlm_cache *cache, uint64_t start,
+			  uint64_t end)
 {
 	return fuse_page_it_iter_first(&cache->ranges, start, end);
 }
@@ -116,8 +116,8 @@ fuse_dlm_find_overlapping(struct fuse_dlm_cache *cache, pgoff_t start,
  * Attempt to merge ranges within and adjacent to the specified region
  * that have the same lock mode.
  */
-static void fuse_dlm_try_merge(struct fuse_dlm_cache *cache, pgoff_t start,
-			       pgoff_t end)
+static void fuse_dlm_try_merge(struct fuse_dlm_cache *cache, uint64_t start,
+			       uint64_t end)
 {
 	struct fuse_dlm_range *range, *next;
 	struct rb_node *node;
@@ -182,8 +182,8 @@ static void fuse_dlm_try_merge(struct fuse_dlm_cache *cache, pgoff_t start,
  *
  * Return: 0 on success, negative error code on failure
  */
-int fuse_dlm_lock_range(struct fuse_inode *inode, pgoff_t start,
-			pgoff_t end, enum fuse_page_lock_mode mode)
+int fuse_dlm_lock_range(struct fuse_inode *inode, uint64_t start,
+			uint64_t end, enum fuse_page_lock_mode mode)
 {
 	struct fuse_dlm_cache *cache = &inode->dlm_locked_areas;
 	struct fuse_dlm_range *range, *new_range, *next;
@@ -191,7 +191,7 @@ int fuse_dlm_lock_range(struct fuse_inode *inode, pgoff_t start,
 	int ret = 0;
 	LIST_HEAD(to_lock);
 	LIST_HEAD(to_upgrade);
-	pgoff_t current_start = start;
+	uint64_t current_start = start;
 
 	if (!cache || start > end)
 		return -EINVAL;
@@ -304,8 +304,8 @@ out_free:
  *
  * Return: 0 on success, negative error code on failure
  */
-static int fuse_dlm_punch_hole(struct fuse_dlm_cache *cache, pgoff_t start,
-			       pgoff_t end)
+static int fuse_dlm_punch_hole(struct fuse_dlm_cache *cache, uint64_t start,
+			       uint64_t end)
 {
 	struct fuse_dlm_range *range, *new_range;
 	int ret = 0;
@@ -363,11 +363,12 @@ out:
  * @end: End page offset
  *
  * Release locks on the specified range of pages.
+ * Note that if start and end are set to zero the cache is destroyed.
  *
  * Return: 0 on success, negative error code on failure
  */
 int fuse_dlm_unlock_range(struct fuse_inode *inode,
-						pgoff_t start, pgoff_t end)
+						uint64_t start, uint64_t end)
 {
 	struct fuse_dlm_cache *cache = &inode->dlm_locked_areas;
 	struct fuse_dlm_range *range, *next;
@@ -375,6 +376,11 @@ int fuse_dlm_unlock_range(struct fuse_inode *inode,
 
 	if (!cache)
 		return -EINVAL;
+
+	if (start == 0 && end == 0) {
+		fuse_dlm_cache_release_locks(inode);
+		return 0;
+	}
 
 	down_write(&cache->lock);
 
@@ -424,13 +430,13 @@ out:
  *
  * Return: true if the entire range is locked, false otherwise
  */
-bool fuse_dlm_range_is_locked(struct fuse_inode *inode, pgoff_t start,
-			      pgoff_t end, enum fuse_page_lock_mode mode)
+bool fuse_dlm_range_is_locked(struct fuse_inode *inode, uint64_t start,
+			      uint64_t end, enum fuse_page_lock_mode mode)
 {
 	struct fuse_dlm_cache *cache = &inode->dlm_locked_areas;
 	struct fuse_dlm_range *range;
 	int lock_mode = 0;
-	pgoff_t current_start = start;
+	uint64_t current_start = start;
 
 	if (!cache || start > end)
 		return false;
@@ -491,7 +497,7 @@ void fuse_get_dlm_write_lock(struct file *file, loff_t offset,
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_inode *fi = get_fuse_inode(inode);
 	struct fuse_mount *fm = ff->fm;
-	loff_t end = (offset + length - 1) | (PAGE_SIZE - 1);
+	uint64_t end = (offset + length - 1) | (PAGE_SIZE - 1);
 
 	/* note that the offset and length don't have to be page aligned here
      * but since we only get here on writeback caching we will send out
@@ -514,8 +520,8 @@ void fuse_get_dlm_write_lock(struct file *file, loff_t offset,
 	memset(&inarg, 0, sizeof(inarg));
 	inarg.fh = ff->fh;
 
-	inarg.offset = offset;
-	inarg.size = end - offset + 1;
+	inarg.start = offset;
+	inarg.end = end;
 	inarg.type = FUSE_DLM_LOCK_WRITE;
 
 	args.opcode = FUSE_DLM_WB_LOCK;
@@ -533,19 +539,20 @@ void fuse_get_dlm_write_lock(struct file *file, loff_t offset,
 		return;
 	}
 
-	if (outarg.locksize < end - offset + 1) {
-		/* fuse server is seriously broken */
-		pr_warn("fuse: dlm lock request for %llu bytes returned %u bytes\n",
-			end - offset + 1, outarg.locksize);
-		fuse_abort_conn(fc);
-		return;
-	}
-
 	if (err)
 		return;
 	else
-		/* ignore any errors here, there is no way we can react appropriately */
-		fuse_dlm_lock_range(fi, offset,
-				    		offset + outarg.locksize - 1,
-				    		FUSE_PAGE_LOCK_WRITE);
+		if (inarg.start < outarg.start ||
+		    inarg.end > outarg.end) {
+			/* fuse server is seriously broken */
+			pr_warn("fuse: dlm lock request for %llu:%llu returned %llu:%llu bytes\n",
+				inarg.start, inarg.end, outarg.start, outarg.end);
+			fuse_abort_conn(fc);
+			return;
+		} else {
+			/* ignore any errors here, there is no way we can react appropriately */
+			fuse_dlm_lock_range(fi, outarg.start,
+					    		outarg.end,
+					    		FUSE_PAGE_LOCK_WRITE);
+		}
 }

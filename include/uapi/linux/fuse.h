@@ -1253,10 +1253,10 @@ enum fuse_dlm_lock_type {
  */
 struct fuse_dlm_lock_in {
 	uint64_t    fh;
-	uint64_t    offset;
-	uint32_t    size;
+	uint64_t    start;
+	uint64_t    end;
 	uint32_t    type;
-	uint64_t    reserved;
+	uint32_t    reserved;
 };
 
 /**
@@ -1266,8 +1266,9 @@ struct fuse_dlm_lock_in {
  * to reduce number of calls)
  */
 struct fuse_dlm_lock_out {
-	uint32_t locksize;
-	uint32_t padding;
+	uint64_t start;
+	uint64_t end;
+	uint64_t reserved;
 };
 
 /**
