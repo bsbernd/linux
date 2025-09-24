@@ -623,7 +623,9 @@ static int fuse_uring_copy_from_ring(struct fuse_ring *ring,
 	if (ent->payload_pages)
 		cs.ring.pages = ent->payload_pages;
 
-	return fuse_copy_out_args(&cs, args, ring_in_out.payload_sz);
+	err = fuse_copy_out_args(&cs, args, ring_in_out.payload_sz);
+	fuse_copy_finish(&cs);
+	return err;
 }
 
 /*
@@ -670,11 +672,14 @@ static int fuse_uring_args_to_ring_pages(struct fuse_ring *ring,
 			     (struct fuse_arg *)in_args, 0);
 	if (err) {
 		pr_info_ratelimited("%s fuse_copy_args failed\n", __func__);
-		return err;
+		goto copy_finish;
 	}
 
 	ent_in_out.payload_sz = cs.ring.copied_sz;
 	memcpy(&headers->ring_ent_in_out, &ent_in_out, sizeof(ent_in_out));
+
+copy_finish:
+	fuse_copy_finish(&cs);
 	return err;
 }
 
@@ -730,12 +735,14 @@ static int fuse_uring_args_to_ring(struct fuse_ring *ring, struct fuse_req *req,
 			     (struct fuse_arg *)in_args, 0);
 	if (err) {
 		pr_info_ratelimited("%s fuse_copy_args failed\n", __func__);
-		return err;
+		goto copy_finish;
 	}
 
 	ent_in_out.payload_sz = cs.ring.copied_sz;
 	err = copy_to_user(&ent->headers->ring_ent_in_out, &ent_in_out,
 			   sizeof(ent_in_out));
+copy_finish:
+	fuse_copy_finish(&cs);
 	return err ? -EFAULT : 0;
 }
 
