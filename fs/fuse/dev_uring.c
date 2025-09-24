@@ -1308,7 +1308,8 @@ static void fuse_uring_send_in_task(struct io_tw_req tw_req, io_tw_token_t tw)
 	fuse_uring_send(ent, cmd, err, issue_flags);
 }
 
-static struct fuse_ring_queue *fuse_uring_select_queue(struct fuse_ring *ring)
+static struct fuse_ring_queue *fuse_uring_select_queue(struct fuse_ring *ring,
+						       bool background)
 {
 	unsigned int qid;
 	int node;
@@ -1332,7 +1333,17 @@ static struct fuse_ring_queue *fuse_uring_select_queue(struct fuse_ring *ring)
 	 */
 	nr_queues = smp_load_acquire(&ring->numa_q_map[node].nr_queues);
 	if (nr_queues) {
+		struct cpumask *mask = ring->numa_q_map[node].registered_q_mask;
+
 		qid = ring->numa_q_map[node].cpu_to_qid[cpu];
+
+		/*
+		 * Background requests result in better performance on a different
+		 * CPU, unless CPUs are already busy.
+		 */
+		if (qid == cpu && background)
+			qid = cpumask_next_wrap(qid, mask);
+
 		if (WARN_ON_ONCE(qid >= ring->max_nr_queues))
 			return NULL;
 		return READ_ONCE(ring->queues[qid]);
@@ -1364,7 +1375,7 @@ void fuse_uring_queue_fuse_req(struct fuse_iqueue *fiq, struct fuse_req *req)
 	int err;
 
 	err = -EINVAL;
-	queue = fuse_uring_select_queue(ring);
+	queue = fuse_uring_select_queue(ring, false);
 	if (!queue)
 		goto err;
 
@@ -1408,7 +1419,7 @@ bool fuse_uring_queue_bq_req(struct fuse_req *req)
 	struct fuse_ring_queue *queue;
 	struct fuse_ring_ent *ent = NULL;
 
-	queue = fuse_uring_select_queue(ring);
+	queue = fuse_uring_select_queue(ring, true);
 	if (!queue)
 		return false;
 
