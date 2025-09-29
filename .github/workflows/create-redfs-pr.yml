@@ -1,0 +1,92 @@
+# Automatially run copy-from-linux-branch.sh on branches and create PR for redfs.
+name: Sync to redfs repo
+on:
+  # Triggers the workflow on pull request merged.
+  pull_request:
+    branches: [ "*" ]
+    types: [ "closed" ]
+
+jobs:
+  create-redfs-pr:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      # Checks-out to a different directory to avoid following checkout removing it.
+      - uses: actions/checkout@v4
+        with:
+          path: linux
+
+      - name: Try to checkout sync-${{ github.ref_name }} if it exists
+        uses: actions/checkout@v4
+        id: try-checkout
+        continue-on-error: true
+        with:
+          repository: DDNStorage/redfs
+          ref: sync-${{ github.ref_name }}
+          fetch-depth: 0
+          path: redfs
+          token: ${{ secrets.REDFS_TOKEN }}
+
+      - name: Fallback to checkout main
+        if: steps.try-checkout.outcome == 'failure'
+        uses: actions/checkout@v4
+        with:
+          repository: DDNStorage/redfs
+          ref: main
+          fetch-depth: 0
+          path: redfs
+          token: ${{ secrets.REDFS_TOKEN }}
+
+      - name: Initialize git
+        run: |
+          git config --global user.name "DDNStorage RED Workflow"
+          git config --global user.email "red@ddn.com"
+
+      - name: Create tracking branch based on main
+        if: steps.try-checkout.outcome == 'failure'
+        run: |
+          pushd redfs
+          git checkout -b sync-${{ github.ref_name }}
+          popd
+
+      - name: Generate PR for redfs
+        run: |
+          declare -A MAP
+          MAP["redfs-rhel9_5-503.40.1"]="5.14.0-503.40.1.el9_5"
+          MAP["redfs-rhel9_6-570.12.1"]="5.14.0-570.26.1.el9_6"
+          MAP["redfs-ubuntu-noble-6.8.0-58.60"]="6.8.0-58.60.ubuntu"
+          kerver=${MAP["${{ github.ref_name }}"]}
+          if [ -z ${kerver} ]; then
+            echo "Cannot find target kernel version"
+            exit 1
+          fi
+          pushd redfs
+          ./copy-from-linux-branch.sh $GITHUB_WORKSPACE/linux ${kerver}
+          git add src/$kerver
+          echo -e "Sync with ${{ github.repository }} branch ${{ github.ref_name }} \n" > ../commit.msg
+          echo -e "Sync with ${{ github.repository }} branch ${{ github.ref_name }} by commit" >> ../commit.msg
+          echo -e "${{ github.sha }}" >> ../commit.msg
+          RET=0
+          git commit -F ../commit.msg 2> ../commit.log || RET=$?;
+          if [ -s ../commit.log ]; then
+            echo "Error detcted in commit:"
+            cat ../commit.log
+            exit 1
+          elif [ $RET -eq 0 ]; then
+            echo "Done. Push the code to remote:"
+            git push origin sync-${{ github.ref_name }} 2> ../push.log ||:
+          else
+            echo "No changes to existed codes. Still try with PR."
+          fi
+          if [ -s ../push.log ]; then
+            echo "Error detected in push:"
+            cat ../push.log
+          fi
+          gh pr create --base main --fill || RET=$?
+          if [ $RET -eq 1 ]; then
+            echo "No pending changes for PR, returning $RET."
+          fi
+          popd
+        env:
+          GH_TOKEN: ${{ secrets.OPENUNIXPAT }}
+
