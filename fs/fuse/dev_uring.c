@@ -19,6 +19,10 @@ MODULE_PARM_DESC(enable_uring,
 
 #define FUSE_URING_IOV_SEGS 2 /* header and payload */
 
+/* Number of requests in the queue until another queue is checked */
+#define FUSE_URING_Q_THRESHOLD 2
+
+#define FUSE_URING_Q_RETRIES 2 /* number of retries for a better queue */
 
 bool fuse_uring_enabled(void)
 {
@@ -1312,9 +1316,10 @@ static struct fuse_ring_queue *fuse_uring_select_queue(struct fuse_ring *ring,
 						       bool background)
 {
 	unsigned int qid;
-	int node;
+	int node, retries = 0;
 	unsigned int nr_queues;
 	unsigned int cpu = task_cpu(current);
+	struct fuse_ring_queue *queue, *primary_queue = NULL;
 
 	cpu = cpu % ring->max_nr_queues;
 
@@ -1344,10 +1349,34 @@ static struct fuse_ring_queue *fuse_uring_select_queue(struct fuse_ring *ring,
 		if (qid == cpu && background)
 			qid = cpumask_next_wrap(qid, mask);
 
+retry:
 		if (WARN_ON_ONCE(qid >= ring->max_nr_queues))
 			return NULL;
-		return READ_ONCE(ring->queues[qid]);
+		queue = READ_ONCE(ring->queues[qid]);
+
+		/* Might happen on teardown */
+		if (unlikely(!queue))
+			return NULL;
+
+		/* Not atomic and with lock, approximate is enough */
+		if (READ_ONCE(queue->nr_reqs) < FUSE_URING_Q_THRESHOLD)
+			return queue;
+
+		/* Retries help for load balancing */
+		if (retries < FUSE_URING_Q_RETRIES) {
+			if (!retries)
+				primary_queue = queue;
+
+			/* Increase cpu, assuming it will map to a differet qid*/
+			qid = cpumask_next_wrap(qid, mask);
+			retries++;
+			goto retry;
+		}
 	}
+
+	/* Retries exceeded, take the primary target queue */
+	if (primary_queue)
+		return primary_queue;
 
 	/* global registered queue bitmap */
 	if (!smp_load_acquire(&ring->q_map.nr_queues))
