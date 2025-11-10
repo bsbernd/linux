@@ -108,6 +108,9 @@ struct fuse_queue_map {
 	/* Tracks which queues are registered */
 	cpumask_var_t registered_q_mask;
 
+	/* number of registered queues */
+	size_t nr_queues;
+
 	/* cpu to qid mapping */
 	int *cpu_to_qid;
 };
