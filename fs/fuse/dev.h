@@ -24,6 +24,7 @@ struct fuse_chan_param {
 	unsigned int max_write;
 	unsigned int max_pages;
 	bool io_uring_enabled;
+	bool uring_reduced_q;
 };
 
 struct fuse_chan *fuse_chan_new(void);

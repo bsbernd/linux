@@ -77,7 +77,7 @@ void fuse_chan_set_initialized(struct fuse_chan *fch, struct fuse_chan_param *pa
 		fch->max_pages = param->max_pages;
 
 		if (param->io_uring_enabled)
-			fuse_uring_conn_init(fch);
+			fuse_uring_conn_init(fch, param->uring_reduced_q);
 	}
 
 	/* Pairs with smp_load_acquire() readers of fch->initialized */

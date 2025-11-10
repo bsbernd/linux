@@ -1304,6 +1304,7 @@ static void process_init_reply(struct fuse_args *args, int error)
 	struct fuse_conn *fc = fm->fc;
 	struct fuse_init_out *arg = &ia->out;
 	bool io_uring_enabled = false;
+	bool uring_reduced_q = false;
 	bool ok = true;
 
 	if (error || arg->major != FUSE_KERNEL_VERSION)
@@ -1437,8 +1438,10 @@ static void process_init_reply(struct fuse_args *args, int error)
 				else
 					ok = false;
 			}
-			if (flags & FUSE_OVER_IO_URING && fuse_uring_enabled())
+			if (flags & FUSE_OVER_IO_URING && fuse_uring_enabled()) {
 				io_uring_enabled = true;
+				uring_reduced_q = flags & FUSE_URING_REDUCED_Q;
+			}
 
 			if (flags & FUSE_REQUEST_TIMEOUT)
 				timeout = arg->request_timeout;
@@ -1473,6 +1476,7 @@ static void process_init_reply(struct fuse_args *args, int error)
 			.max_write = fc->max_write,
 			.max_pages = fc->max_pages,
 			.io_uring_enabled = io_uring_enabled,
+			.uring_reduced_q = uring_reduced_q,
 		};
 		fuse_chan_set_initialized(fc->chan, &cp);
 	}
@@ -1503,7 +1507,7 @@ static struct fuse_init_args *fuse_new_init(struct fuse_mount *fm)
 		FUSE_SECURITY_CTX | FUSE_CREATE_SUPP_GROUP |
 		FUSE_HAS_EXPIRE_ONLY | FUSE_DIRECT_IO_ALLOW_MMAP |
 		FUSE_NO_EXPORT_SUPPORT | FUSE_HAS_RESEND | FUSE_ALLOW_IDMAP |
-		FUSE_REQUEST_TIMEOUT;
+		FUSE_REQUEST_TIMEOUT | FUSE_URING_REDUCED_Q;
 #ifdef CONFIG_FUSE_VDAX
 	if (fm->fc->vdax)
 		flags |= FUSE_MAP_ALIGNMENT;
