@@ -257,6 +257,7 @@
  *  - add backing_id_64 to fuse_open_out
  *  - add FUSE_NOTIFY_BACKING_MAP, fuse_notify_backing_map_out, fuse_extent
  *  - add FUSE_BACKING_MAP_CREATE, FUSE_BACKING_MAP_CYCLIC
+ *  - add FUSE_URING_DYNAMIC_Q
  */
 
 #ifndef _LINUX_FUSE_H
@@ -480,6 +481,8 @@ struct fuse_file_lock {
  *		privilege that mounting virtiofs or fuseblk requires).
  *		Insufficiently privileged servers ignore it.
  * FUSE_PASSTHROUGH_V2: use 64 bit server allocated backing ID
+ * FUSE_URING_DYNAMIC_Q: INIT reply opt-in to 1..nr-cpus queues, each created
+ *		with FUSE_IO_URING_CMD_ADD_QUEUE; serving starts at the first entry.
  */
 #define FUSE_ASYNC_READ		(1 << 0)
 #define FUSE_POSIX_LOCKS	(1 << 1)
@@ -530,6 +533,7 @@ struct fuse_file_lock {
 #define FUSE_HAS_IO_URING_BUFPOOL (1ULL << 43)
 #define FUSE_HAS_SYNCFS		(1ULL << 44)
 #define FUSE_PASSTHROUGH_V2	(1ULL << 45)
+#define FUSE_URING_DYNAMIC_Q    (1ULL << 46)
 
 /*
  * CUSE INIT request/reply flags

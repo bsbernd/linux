@@ -163,6 +163,7 @@ struct fuse_queue_map {
 };
 
 struct fuse_queue_maps {
+	struct rcu_head rcu;
 	struct fuse_queue_map global;
 	struct fuse_queue_map numa[];
 };
@@ -188,8 +189,11 @@ struct fuse_ring {
 	 */
 	unsigned int stop_debug_log : 1;
 
-	/* static CPU to queue mapping which queue a fuse request goes to */
-	struct fuse_queue_maps *q_maps;
+	/*
+	 * CPU to queue mapping which queue a fuse request goes to. Static
+	 * without reduced_q, else replaced on each ADD_QUEUE.
+	 */
+	struct fuse_queue_maps __rcu *q_maps;
 
 	wait_queue_head_t stop_waitq;
 
@@ -202,9 +206,10 @@ struct fuse_ring {
 	atomic_t queue_refs;
 
 	bool ready;
+	bool reduced_q;
 };
 
-void fuse_uring_conn_init(struct fuse_chan *fch);
+void fuse_uring_conn_init(struct fuse_chan *fch, bool reduced_q);
 void fuse_uring_stop_queues(struct fuse_ring *ring);
 void fuse_uring_abort_end_requests(struct fuse_ring *ring);
 int fuse_uring_cmd(struct io_uring_cmd *cmd, unsigned int issue_flags);
@@ -244,7 +249,7 @@ static inline bool fuse_uring_ready(struct fuse_chan *fch)
 
 #else /* CONFIG_FUSE_IO_URING */
 
-static inline void fuse_uring_conn_init(struct fuse_chan *fch)
+static inline void fuse_uring_conn_init(struct fuse_chan *fch, bool reduced_q)
 {
 }
 

@@ -1304,6 +1304,7 @@ static void process_init_reply(struct fuse_args *args, int error)
 	struct fuse_conn *fc = fm->fc;
 	struct fuse_init_out *arg = &ia->out;
 	bool io_uring_enabled = false;
+	bool uring_reduced_q = false;
 	bool ok = true;
 
 	if (error || arg->major != FUSE_KERNEL_VERSION)
@@ -1437,8 +1438,10 @@ static void process_init_reply(struct fuse_args *args, int error)
 				else
 					ok = false;
 			}
-			if (flags & FUSE_OVER_IO_URING && fuse_uring_enabled())
+			if (flags & FUSE_OVER_IO_URING && fuse_uring_enabled()) {
 				io_uring_enabled = true;
+				uring_reduced_q = flags & FUSE_URING_DYNAMIC_Q;
+			}
 
 			if (flags & FUSE_REQUEST_TIMEOUT)
 				timeout = arg->request_timeout;
@@ -1473,6 +1476,7 @@ static void process_init_reply(struct fuse_args *args, int error)
 			.max_write = fc->max_write,
 			.max_pages = fc->max_pages,
 			.io_uring_enabled = io_uring_enabled,
+			.uring_reduced_q = uring_reduced_q,
 		};
 		fuse_chan_set_initialized(fc->chan, &cp);
 	}
@@ -1521,7 +1525,8 @@ static struct fuse_init_args *fuse_new_init(struct fuse_mount *fm)
 		flags |= FUSE_HAS_SYNCFS;
 
 	if (fuse_uring_enabled())
-		flags |= FUSE_OVER_IO_URING | FUSE_HAS_IO_URING_BUFPOOL;
+		flags |= FUSE_OVER_IO_URING | FUSE_HAS_IO_URING_BUFPOOL |
+			 FUSE_URING_DYNAMIC_Q;
 
 	ia->in.flags = flags;
 	ia->in.flags2 = flags >> 32;

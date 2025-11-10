@@ -280,6 +280,14 @@ static void fuse_uring_free_q_maps(struct fuse_queue_maps *maps)
 	kfree(maps);
 }
 
+static void fuse_uring_free_q_maps_rcu(struct rcu_head *rcu)
+{
+	struct fuse_queue_maps *maps =
+		container_of(rcu, struct fuse_queue_maps, rcu);
+
+	fuse_uring_free_q_maps(maps);
+}
+
 void fuse_uring_destruct(struct fuse_chan *fch)
 {
 	struct fuse_ring *ring = fch->ring;
@@ -312,7 +320,7 @@ void fuse_uring_destruct(struct fuse_chan *fch)
 		WRITE_ONCE(ring->queues[qid], NULL);
 	}
 
-	fuse_uring_free_q_maps(ring->q_maps);
+	fuse_uring_free_q_maps(rcu_access_pointer(ring->q_maps));
 	kfree(ring->queues);
 	kfree(ring);
 	fch->ring = NULL;
@@ -394,9 +402,10 @@ static void fuse_uring_cpu_qid_mapping(struct fuse_queue_map *q_map, int node)
 /*
  * Basic ring setup for this connection based on the provided configuration
  */
-static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch)
+static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch, bool reduced_q)
 {
 	struct fuse_ring *ring;
+	struct fuse_queue_maps *maps = NULL;
 	size_t nr_queues = num_possible_cpus();
 	size_t max_payload_size;
 
@@ -417,16 +426,19 @@ static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch)
 	 */
 	ring->max_nr_queues = nr_queues;
 
-	/* Legacy behavior by default, one queue per cpu */
-	ring->q_maps = fuse_uring_alloc_q_maps();
-	if (!ring->q_maps)
-		goto out_err;
-	/* a qid that is not a possible CPU gets no requests */
-	cpumask_copy(ring->q_maps->global.registered_q_mask, cpu_possible_mask);
-	/* valid qids are 0...nr_queues - 1, not 0...nr_cpu_ids - 1 */
-	bitmap_clear(cpumask_bits(ring->q_maps->global.registered_q_mask),
-		     nr_queues, nr_cpu_ids - nr_queues);
-	fuse_uring_cpu_qid_mapping(&ring->q_maps->global, NUMA_NO_NODE);
+	/* With reduced_q, FUSE_IO_URING_CMD_ADD_QUEUE builds the maps */
+	if (!reduced_q) {
+		/* Legacy behavior, one queue per cpu */
+		maps = fuse_uring_alloc_q_maps();
+		if (!maps)
+			goto out_err;
+		/* a qid that is not a possible CPU gets no requests */
+		cpumask_copy(maps->global.registered_q_mask, cpu_possible_mask);
+		/* valid qids are 0...nr_queues - 1, not 0...nr_cpu_ids - 1 */
+		bitmap_clear(cpumask_bits(maps->global.registered_q_mask),
+			     nr_queues, nr_cpu_ids - nr_queues);
+		fuse_uring_cpu_qid_mapping(&maps->global, NUMA_NO_NODE);
+	}
 
 	max_payload_size = max(FUSE_MIN_READ_BUFFER, fch->max_write);
 	max_payload_size = max(max_payload_size, fch->max_pages * PAGE_SIZE);
@@ -441,22 +453,69 @@ static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch)
 
 	ring->chan = fch;
 	ring->max_payload_sz = max_payload_size;
+	ring->reduced_q = reduced_q;
+	RCU_INIT_POINTER(ring->q_maps, maps);
 	smp_store_release(&fch->ring, ring);
 
 	spin_unlock(&fch->lock);
 	return ring;
 
 out_err:
-	fuse_uring_free_q_maps(ring->q_maps);
+	fuse_uring_free_q_maps(maps);
 	kfree(ring->queues);
 	kfree(ring);
 	return NULL;
 }
 
-void fuse_uring_conn_init(struct fuse_chan *fch)
+void fuse_uring_conn_init(struct fuse_chan *fch, bool reduced_q)
 {
-	if (fuse_uring_create(fch))
+	if (fuse_uring_create(fch, reduced_q))
 		fch->io_uring = 1;
+}
+
+static void fuse_uring_build_q_maps(struct fuse_queue_maps *maps)
+{
+	int node, registered_qid;
+
+	for_each_cpu(registered_qid, maps->global.registered_q_mask) {
+		node = fuse_uring_cpu_to_node(registered_qid);
+		cpumask_set_cpu(registered_qid,
+				maps->numa[node].registered_q_mask);
+	}
+
+	fuse_uring_cpu_qid_mapping(&maps->global, -1);
+	for (node = 0; node < nr_node_ids; node++) {
+		/*
+		 * Gives every entry a registered qid. CPU hot add can move a
+		 * CPU into this node after the last
+		 * FUSE_IO_URING_CMD_ADD_QUEUE. Without the copy, a request on
+		 * that CPU gets qid 0, which may not be registered.
+		 */
+		if (!cpumask_empty(maps->numa[node].registered_q_mask))
+			memcpy(maps->numa[node].cpu_to_qid,
+			       maps->global.cpu_to_qid,
+			       nr_cpu_ids * sizeof(*maps->global.cpu_to_qid));
+		fuse_uring_cpu_qid_mapping(&maps->numa[node], node);
+	}
+}
+
+/* Returns the replaced maps, to be freed after an RCU grace period */
+static struct fuse_queue_maps *
+fuse_uring_replace_q_maps(struct fuse_ring *ring, struct fuse_queue_maps *maps,
+			  int qid)
+{
+	struct fuse_queue_maps *old;
+
+	old = rcu_dereference_protected(ring->q_maps,
+					lockdep_is_held(&ring->chan->lock));
+	if (old)
+		cpumask_copy(maps->global.registered_q_mask,
+			     old->global.registered_q_mask);
+	cpumask_set_cpu(qid, maps->global.registered_q_mask);
+	fuse_uring_build_q_maps(maps);
+	rcu_assign_pointer(ring->q_maps, maps);
+
+	return old;
 }
 
 static struct fuse_ring_queue *fuse_uring_create_queue(struct fuse_ring *ring,
@@ -464,16 +523,24 @@ static struct fuse_ring_queue *fuse_uring_create_queue(struct fuse_ring *ring,
 						       bool fail_if_exists)
 {
 	struct fuse_chan *fch = ring->chan;
-	struct fuse_ring_queue *queue;
+	struct fuse_queue_maps *new_maps = NULL, *old_maps = NULL;
+	struct fuse_ring_queue *queue, *result = ERR_PTR(-ENOMEM);
 	struct list_head *pq;
 
 	queue = kzalloc_obj(*queue, GFP_KERNEL_ACCOUNT);
 	if (!queue)
 		return ERR_PTR(-ENOMEM);
 	pq = fuse_pqueue_alloc();
-	if (!pq) {
-		kfree(queue);
-		return ERR_PTR(-ENOMEM);
+	if (!pq)
+		goto out_free;
+	if (ring->reduced_q) {
+		/*
+		 * Every queue addition creates a new map to make reading the
+		 * old map race free
+		 */
+		new_maps = fuse_uring_alloc_q_maps();
+		if (!new_maps)
+			goto out_free;
 	}
 
 	queue->qid = qid;
@@ -494,11 +561,16 @@ static struct fuse_ring_queue *fuse_uring_create_queue(struct fuse_ring *ring,
 
 	spin_lock(&fch->lock);
 	if (ring->queues[qid]) {
-		spin_unlock(&fch->lock);
-		kfree(queue->fpq.processing);
-		kfree(queue->bufpool);
-		kfree(queue);
-		return fail_if_exists ? ERR_PTR(-EEXIST) : ring->queues[qid];
+		result = fail_if_exists ? ERR_PTR(-EEXIST) : ring->queues[qid];
+		goto out_unlock;
+	}
+	/*
+	 * Reduced queues can be added after ring->ready. Connection abort
+	 * stops only queues it finds, so a queue is added only while connected.
+	 */
+	if (ring->reduced_q && !fch->connected) {
+		result = ERR_PTR(-ENOTCONN);
+		goto out_unlock;
 	}
 
 	/*
@@ -507,9 +579,24 @@ static struct fuse_ring_queue *fuse_uring_create_queue(struct fuse_ring *ring,
 	 * fully initialized queue after &ring->queues[qid] is set
 	 */
 	smp_store_release(&ring->queues[qid], queue);
+
+	/* Update maps so that requests can be scheduled via the new queue */
+	if (new_maps)
+		old_maps = fuse_uring_replace_q_maps(ring, new_maps, qid);
 	spin_unlock(&fch->lock);
 
+	if (old_maps)
+		call_rcu(&old_maps->rcu, fuse_uring_free_q_maps_rcu);
+
 	return queue;
+
+out_unlock:
+	spin_unlock(&fch->lock);
+out_free:
+	fuse_uring_free_q_maps(new_maps);
+	kfree(pq);
+	kfree(queue);
+	return result;
 }
 
 static void fuse_uring_stop_fuse_req_end(struct fuse_req *req)
@@ -1446,7 +1533,7 @@ static int fuse_uring_commit_fetch(struct io_uring_cmd *cmd, int issue_flags,
 	return 0;
 }
 
-static bool is_ring_ready(struct fuse_ring *ring, int current_qid)
+static bool all_queues_have_entries(struct fuse_ring *ring, int current_qid)
 {
 	int qid;
 	struct fuse_ring_queue *queue;
@@ -1498,11 +1585,15 @@ static int fuse_uring_do_register(struct fuse_ring_ent *ent,
 
 	spin_lock(&queue->lock);
 	ent->cmd = cmd;
-	fuse_uring_ent_avail(ent, queue);
 	spin_unlock(&queue->lock);
 
+	/* Requests wait on a queue that ADD_QUEUE added before its first entry */
+	if (fuse_uring_get_next_fuse_req(ent, queue, issue_flags))
+		fuse_uring_send(ent, cmd, 0, issue_flags);
+
 	if (!READ_ONCE(ring->ready)) {
-		bool ready = is_ring_ready(ring, queue->qid);
+		bool ready = ring->reduced_q ||
+			     all_queues_have_entries(ring, queue->qid);
 
 		if (ready) {
 			WRITE_ONCE(fiq->ops, &fuse_io_uring_ops);
@@ -1637,6 +1728,8 @@ static int fuse_uring_register(struct io_uring_cmd *cmd,
 
 	queue = READ_ONCE(ring->queues[qid]);
 	if (!queue) {
+		if (ring->reduced_q)
+			return -EINVAL;
 		queue = fuse_uring_create_queue(ring, qid, false, false);
 		if (IS_ERR(queue))
 			return PTR_ERR(queue);
@@ -1889,12 +1982,17 @@ static void fuse_uring_send_in_task(struct io_tw_req tw_req, io_tw_token_t tw)
 
 static struct fuse_ring_queue *fuse_uring_select_queue(struct fuse_ring *ring)
 {
-	struct fuse_queue_maps *maps = ring->q_maps;
+	struct fuse_queue_maps *maps;
 	struct fuse_queue_map *q_map;
-	struct fuse_ring_queue *queue;
+	struct fuse_ring_queue *queue = NULL;
 	unsigned int cpu = task_cpu(current);
 	unsigned int qid;
 	int node = fuse_uring_cpu_to_node(cpu);
+
+	rcu_read_lock();
+	maps = rcu_dereference(ring->q_maps);
+	if (!maps)
+		goto out;
 
 	/*
 	 * CPU and node ids stay below nr_cpu_ids and nr_node_ids, the sizes
@@ -1909,7 +2007,8 @@ static struct fuse_ring_queue *fuse_uring_select_queue(struct fuse_ring *ring)
 
 	queue = READ_ONCE(ring->queues[qid]);
 	WARN_ONCE(!queue, "Missing queue for qid %d\n", qid);
-
+out:
+	rcu_read_unlock();
 	return queue;
 }
 
