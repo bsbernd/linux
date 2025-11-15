@@ -885,15 +885,28 @@ struct io_uring_buf_ring {
  *			use of it will consume only as much as it needs. This
  *			requires that both the kernel and application keep
  *			track of where the current read/recv index is at.
+ * IOU_PBUF_RING_KERNEL_MANAGED: If set, kernel allocates and manages the memory
+ *                      for the ring and its buffers. The application must set
+ *                      the buffer size through reg->buf_size and the size must
+ *                      be page-aligned. When the application subsequently calls
+ *                      mmap(2) with
+ *                      IORING_OFF_PBUF_RING | (bgid << IORING_OFF_PBUF_SHIFT),
+ *                      the virtual mapping returned is a contiguous mapping of
+ *                      the buffers.
  */
 enum io_uring_register_pbuf_ring_flags {
 	IOU_PBUF_RING_MMAP	= 1,
 	IOU_PBUF_RING_INC	= 2,
+	IOU_PBUF_RING_KERNEL_MANAGED = 4,
 };
 
 /* argument for IORING_(UN)REGISTER_PBUF_RING */
 struct io_uring_buf_reg {
-	__u64	ring_addr;
+	union {
+		__u64	ring_addr;
+		/* used if reg->flags & IOU_PBUF_RING_KERNEL_MANAGED */
+		__u32   buf_size;
+	};
 	__u32	ring_entries;
 	__u16	bgid;
 	__u16	flags;
