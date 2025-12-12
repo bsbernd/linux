@@ -1161,36 +1161,6 @@ static int fuse_uring_commit_fetch(struct io_uring_cmd *cmd, int issue_flags,
 }
 
 /*
- * fuse_uring_req_fetch command handling
- */
-static void fuse_uring_do_register(struct fuse_ring_ent *ent,
-				   struct io_uring_cmd *cmd,
-				   unsigned int issue_flags)
-{
-	struct fuse_ring_queue *queue = ent->queue;
-	struct fuse_ring *ring = queue->ring;
-	struct fuse_conn *fc = ring->fc;
-	struct fuse_iqueue *fiq = &fc->iq;
-	int node = cpu_to_node(queue->qid);
-
-	if (WARN_ON_ONCE(node >= ring->nr_numa_nodes))
-		node = 0;
-
-	fuse_uring_prepare_cancel(cmd, issue_flags, ent);
-
-	spin_lock(&queue->lock);
-	ent->cmd = cmd;
-	fuse_uring_ent_avail(ent, queue);
-	spin_unlock(&queue->lock);
-
-	if (!ring->ready) {
-		WRITE_ONCE(fiq->ops, &fuse_io_uring_ops);
-		WRITE_ONCE(ring->ready, true);
-		wake_up_all(&fc->blocked_waitq);
-	}
-}
-
-/*
  * Copy from memmap.c, should be exported there
  */
 static struct page **io_pin_pages(unsigned long uaddr, unsigned long len,
@@ -1370,6 +1340,7 @@ static int fuse_uring_register(struct io_uring_cmd *cmd,
 	struct fuse_ring *ring = smp_load_acquire(&fc->ring);
 	struct fuse_ring_queue *queue;
 	struct fuse_ring_ent *ent;
+	struct fuse_iqueue *fiq = &fc->iq;
 	int err;
 	unsigned int qid = READ_ONCE(cmd_req->qid);
 
@@ -1401,8 +1372,18 @@ static int fuse_uring_register(struct io_uring_cmd *cmd,
 	if (IS_ERR(ent))
 		return PTR_ERR(ent);
 
-	fuse_uring_do_register(ent, cmd, issue_flags);
+	fuse_uring_prepare_cancel(cmd, issue_flags, ent);
+	if (!ring->ready) {
+		WRITE_ONCE(fiq->ops, &fuse_io_uring_ops);
+		WRITE_ONCE(ring->ready, true);
+		wake_up_all(&fc->blocked_waitq);
+	}
 
+	spin_lock(&queue->lock);
+	ent->cmd = cmd;
+	spin_unlock(&queue->lock);
+
+	/* Marks the ring entry as ready */
 	fuse_uring_next_fuse_req(ent, queue, issue_flags);
 
 	return 0;
