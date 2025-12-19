@@ -10,18 +10,6 @@
 
 #include "fuse_i.h"
 
-#include <linux/fuse.h>
-#include <linux/pagemap.h>
-#include <linux/file.h>
-#include <linux/sched.h>
-#include <linux/namei.h>
-#include <linux/slab.h>
-#include <linux/xattr.h>
-#include <linux/posix_acl.h>
-#include <linux/pid_namespace.h>
-#include <linux/user_namespace.h>
-#include <uapi/linux/fuse.h>
-
 /*
  * Compound request builder and state tracker and args pointer storage
  */
