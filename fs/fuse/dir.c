@@ -6,8 +6,8 @@
   See the file COPYING.
 */
 
-#include "fuse_dlm_cache.h"
 #include "fuse_i.h"
+#include "fuse_dlm_cache.h"
 
 #include <linux/pagemap.h>
 #include <linux/file.h>
