@@ -3,7 +3,10 @@ name: Sync to redfs repo
 on:
   # Triggers the workflow on pull request merged.
   pull_request:
-    branches: [ "*" ]
+    branches: [ "redfs-*" ]
+    types: [ "closed" ]
+  pull_request_target:
+    branches: [ "redfs-*" ]
     types: [ "closed" ]
 
 jobs:
@@ -52,8 +55,9 @@ jobs:
       - name: Generate PR for redfs
         run: |
           declare -A MAP
+          MAP["redfs-rhel9_4-427.42.1"]="5.14.0-427.42.1.el9_4"
           MAP["redfs-rhel9_5-503.40.1"]="5.14.0-503.40.1.el9_5"
-          MAP["redfs-rhel9_6-570.12.1"]="5.14.0-570.26.1.el9_6"
+          MAP["redfs-rhel9_6-570.12.1"]="5.14.0-570.12.1.el9_6"
           MAP["redfs-ubuntu-noble-6.8.0-58.60"]="6.8.0-58.60.ubuntu"
           kerver=${MAP["${{ github.ref_name }}"]}
           if [ -z ${kerver} ]; then
@@ -63,7 +67,7 @@ jobs:
           pushd redfs
           ./copy-from-linux-branch.sh $GITHUB_WORKSPACE/linux ${kerver}
           git add src/$kerver
-          echo -e "Sync with ${{ github.repository }} branch ${{ github.ref_name }} \n" > ../commit.msg
+          echo -e "Sync with ${{ github.repository }} branch ${{ github.ref_name }}\n" > ../commit.msg
           echo -e "Sync with ${{ github.repository }} branch ${{ github.ref_name }} by commit" >> ../commit.msg
           echo -e "${{ github.sha }}" >> ../commit.msg
           RET=0
@@ -79,7 +83,7 @@ jobs:
             echo "No changes to existed codes. Still try with PR."
           fi
           if [ -s ../push.log ]; then
-            echo "Error detected in push:"
+            echo "Message detected in push:"
             cat ../push.log
           fi
           gh pr create --base main --fill || RET=$?
@@ -88,5 +92,5 @@ jobs:
           fi
           popd
         env:
-          GH_TOKEN: ${{ secrets.OPENUNIXPAT }}
+          GH_TOKEN: ${{ secrets.REDFS_TOKEN }}
 
