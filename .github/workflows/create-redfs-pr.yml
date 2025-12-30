@@ -5,9 +5,6 @@ on:
   pull_request:
     branches: [ "redfs-*" ]
     types: [ "closed" ]
-  pull_request_target:
-    branches: [ "redfs-*" ]
-    types: [ "closed" ]
 
 jobs:
   create-redfs-pr:
