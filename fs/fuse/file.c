@@ -24,6 +24,39 @@
 #include <linux/task_io_accounting_ops.h>
 #include <linux/iomap.h>
 
+/*
+ * Helper function to initialize fuse_args for OPEN/OPENDIR operations
+ */
+void fuse_open_args_fill(struct fuse_args *args, u64 nodeid, int opcode,
+			 struct fuse_open_in *inarg, struct fuse_open_out *outarg)
+{
+	args->opcode = opcode;
+	args->nodeid = nodeid;
+	args->in_numargs = 1;
+	args->in_args[0].size = sizeof(*inarg);
+	args->in_args[0].value = inarg;
+	args->out_numargs = 1;
+	args->out_args[0].size = sizeof(*outarg);
+	args->out_args[0].value = outarg;
+}
+
+/*
+ * Helper function to initialize fuse_args for GETATTR operations
+ */
+void fuse_getattr_args_fill(struct fuse_args *args, u64 nodeid,
+			     struct fuse_getattr_in *inarg,
+			     struct fuse_attr_out *outarg)
+{
+	args->opcode = FUSE_GETATTR;
+	args->nodeid = nodeid;
+	args->in_numargs = 1;
+	args->in_args[0].size = sizeof(*inarg);
+	args->in_args[0].value = inarg;
+	args->out_numargs = 1;
+	args->out_args[0].size = sizeof(*outarg);
+	args->out_args[0].value = outarg;
+}
+
 static int fuse_send_open(struct fuse_mount *fm, u64 nodeid,
 			  unsigned int open_flags, int opcode,
 			  struct fuse_open_out *outargp)
@@ -41,14 +74,7 @@ static int fuse_send_open(struct fuse_mount *fm, u64 nodeid,
 		inarg.open_flags |= FUSE_OPEN_KILL_SUIDGID;
 	}
 
-	args.opcode = opcode;
-	args.nodeid = nodeid;
-	args.in_numargs = 1;
-	args.in_args[0].size = sizeof(inarg);
-	args.in_args[0].value = &inarg;
-	args.out_numargs = 1;
-	args.out_args[0].size = sizeof(*outargp);
-	args.out_args[0].value = outargp;
+	fuse_open_args_fill(&args, nodeid, opcode, &inarg, outargp);
 
 	return fuse_simple_request(fm, &args);
 }
@@ -125,53 +151,38 @@ static void fuse_file_put(struct fuse_file *ff, bool sync)
 	}
 }
 
-static int fuse_compound_open_getattr(struct fuse_mount *fm, u64 nodeid, int flags,
-			       int opcode, struct fuse_file *ff, struct fuse_attr_out *out_attr)
+static int fuse_compound_open_getattr(struct fuse_mount *fm, u64 nodeid,
+				      int flags, int opcode,
+				      struct fuse_file *ff,
+				      struct fuse_attr_out *outattrp,
+				      struct fuse_open_out *outopenp)
 {
 	struct fuse_compound_req *compound;
-	struct fuse_args open_args = {}, getattr_args = {};
+	struct fuse_args open_args = {};
+	struct fuse_args getattr_args = {};
 	struct fuse_open_in open_in = {};
 	struct fuse_getattr_in getattr_in = {};
-	struct fuse_open_out open_out;
-	struct fuse_attr_out attr_out;
 	int err;
 
-	/* Build compound request with flag to execute in the given order */
 	compound = fuse_compound_alloc(fm, 0);
 	if (IS_ERR(compound))
 		return PTR_ERR(compound);
 
-	/* Add OPEN */
 	open_in.flags = flags & ~(O_CREAT | O_EXCL | O_NOCTTY);
 	if (!fm->fc->atomic_o_trunc)
 		open_in.flags &= ~O_TRUNC;
 
 	if (fm->fc->handle_killpriv_v2 &&
-	    (open_in.flags & O_TRUNC) && !capable(CAP_FSETID)) {
+	    (open_in.flags & O_TRUNC) && !capable(CAP_FSETID))
 		open_in.open_flags |= FUSE_OPEN_KILL_SUIDGID;
-	}
-	open_args.opcode = opcode;
-	open_args.nodeid = nodeid;
-	open_args.in_numargs = 1;
-	open_args.in_args[0].size = sizeof(open_in);
-	open_args.in_args[0].value = &open_in;
-	open_args.out_numargs = 1;
-	open_args.out_args[0].size = sizeof(struct fuse_open_out);
-	open_args.out_args[0].value = &open_out;
+
+	fuse_open_args_fill(&open_args, nodeid, opcode, &open_in, outopenp);
 
 	err = fuse_compound_add(compound, &open_args);
 	if (err)
 		goto out;
 
-	/* Add GETATTR */
-	getattr_args.opcode = FUSE_GETATTR;
-	getattr_args.nodeid = nodeid;
-	getattr_args.in_numargs = 1;
-	getattr_args.in_args[0].size = sizeof(getattr_in);
-	getattr_args.in_args[0].value = &getattr_in;
-	getattr_args.out_numargs = 1;
-	getattr_args.out_args[0].size = sizeof(struct fuse_attr_out);
-	getattr_args.out_args[0].value = &attr_out;
+	fuse_getattr_args_fill(&getattr_args, nodeid, &getattr_in, outattrp);
 
 	err = fuse_compound_add(compound, &getattr_args);
 	if (err)
@@ -181,14 +192,19 @@ static int fuse_compound_open_getattr(struct fuse_mount *fm, u64 nodeid, int fla
 	if (err)
 		goto out;
 
-	ff->fh = open_out.fh;
-	ff->open_flags = open_out.open_flags;
+	err = fuse_compound_get_error(compound, 0);
+	if (err)
+		goto out;
 
-	if (out_attr)
-		*out_attr = attr_out;
+	err = fuse_compound_get_error(compound, 1);
+	if (err)
+		goto out;
+
+	ff->fh = outopenp->fh;
+	ff->open_flags = outopenp->open_flags;
 
 out:
-	fuse_compound_free(compound);
+	kfree(compound);
 	return err;
 }
 
@@ -209,36 +225,41 @@ struct fuse_file *fuse_file_open(struct fuse_mount *fm, u64 nodeid,
 	/* Default for no-open */
 	ff->open_flags = FOPEN_KEEP_CACHE | (isdir ? FOPEN_CACHE_DIR : 0);
 	if (open) {
-		struct fuse_open_out outarg;
+		/* Store outarg for fuse_finish_open() */
+		struct fuse_open_out *outargp = &ff->args->open_outarg;
 		int err = -ENOSYS;
 
 		if (inode && fc->compound_open_getattr) {
 			struct fuse_attr_out attr_outarg;
+
 			err = fuse_compound_open_getattr(fm, nodeid, open_flags,
-							opcode, ff, &attr_outarg);
+							 opcode, ff,
+							 &attr_outarg, outargp);
+			if (err == -ENOSYS)
+				fc->compound_open_getattr = 0;
 			if (!err)
-				fuse_change_attributes(inode, &attr_outarg.attr, NULL,
+				fuse_change_attributes(inode, &attr_outarg.attr,
+						       NULL,
 						       ATTR_TIMEOUT(&attr_outarg),
 						       fuse_get_attr_version(fc));
 		}
 		if (err == -ENOSYS) {
-			err = fuse_send_open(fm, nodeid, open_flags, opcode, &outarg);
-
+			err = fuse_send_open(fm, nodeid, open_flags, opcode, outargp);
 			if (!err) {
-				ff->fh = outarg.fh;
-				ff->open_flags = outarg.open_flags;
+				ff->fh = outargp->fh;
+				ff->open_flags = outargp->open_flags;
 			}
 		}
 
 		if (err) {
-			if(err != -ENOSYS) {
+			if (err != -ENOSYS) {
 				/* err is not ENOSYS */
 				fuse_file_free(ff);
 				return ERR_PTR(err);
 			} else {
 				/* No release needed */
-				kfree(ff->release_args);
-				ff->release_args = NULL;
+				kfree(ff->args);
+				ff->args = NULL;
 
 				/* we don't have open */
 				if (isdir)
