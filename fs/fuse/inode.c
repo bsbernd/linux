@@ -33,6 +33,10 @@ MODULE_AUTHOR("Miklos Szeredi <miklos@szeredi.hu>");
 MODULE_DESCRIPTION("Filesystem in Userspace");
 MODULE_LICENSE("GPL");
 
+static bool __read_mostly enable_compound;
+module_param(enable_compound, bool, 0644);
+MODULE_PARM_DESC(enable_uring, "Enable fuse compounds");
+
 static struct kmem_cache *fuse_inode_cachep;
 struct list_head fuse_conn_list;
 DEFINE_MUTEX(fuse_mutex);
@@ -1039,10 +1043,8 @@ void fuse_conn_init(struct fuse_conn *fc, struct fuse_mount *fm,
 	fc->connected = 1;
 	fc->dlm = 1;
 
-	/* pretend fuse server supports compound operations
-	 * until it tells us otherwise.
-	 */
-	fc->compound_open_getattr = 1;
+	/* module option for now */
+	fc->compound_open_getattr = enable_compound;
 
 	atomic64_set(&fc->attr_version, 1);
 	atomic64_set(&fc->evict_ctr, 1);
