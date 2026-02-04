@@ -356,26 +356,25 @@ out_err:
 }
 
 static void fuse_uring_cpu_qid_mapping(struct fuse_ring *ring, int qid,
-				       struct fuse_queue_map *q_map)
+				       struct fuse_queue_map *q_map,
+				       int node)
 {
-	int cpu, qid_idx;
+	int cpu, qid_idx, mapping_count = 0;
 	size_t nr_queues;
 
 	cpumask_set_cpu(qid, q_map->registered_q_mask);
 	nr_queues = cpumask_weight(q_map->registered_q_mask);
 	for (cpu = 0; cpu < ring->max_nr_queues; cpu++) {
-		if (!q_map->cpu_to_qid)
-			return;
+		if (node != -1 && cpu_to_node(cpu) != node)
+			continue;
 
-		/*
-		 * Position of this CPU within the registered queue mask,
-		 * handles non-contiguous CPU distributions across NUMA nodes.
-		 */
-		qid_idx = bitmap_weight(
-				cpumask_bits(q_map->registered_q_mask), cpu);
-
-		q_map->cpu_to_qid[cpu] = cpumask_nth(qid_idx % nr_queues,
+		qid_idx = mapping_count % nr_queues;
+		q_map->cpu_to_qid[cpu] = cpumask_nth(qid_idx,
 						     q_map->registered_q_mask);
+		mapping_count++;
+		pr_debug("%s node=%d qid=%d qid_idx=%d nr_queues=%zu %d->%d\n",
+			 __func__, node, qid, qid_idx, nr_queues, cpu,
+			 q_map->cpu_to_qid[cpu]);
 	}
 }
 
@@ -426,7 +425,7 @@ static struct fuse_ring_queue *fuse_uring_create_queue(struct fuse_ring *ring,
 
 	/* Static mapping from cpu to per numa queues */
 	node = cpu_to_node(qid);
-	fuse_uring_cpu_qid_mapping(ring, qid, &ring->numa_q_map[node]);
+	fuse_uring_cpu_qid_mapping(ring, qid, &ring->numa_q_map[node], node);
 
 	/*
 	 * smp_store_release, as the variable is read without fc->lock and
@@ -437,7 +436,7 @@ static struct fuse_ring_queue *fuse_uring_create_queue(struct fuse_ring *ring,
 			   ring->numa_q_map[node].nr_queues + 1);
 
 	/* global mapping */
-	fuse_uring_cpu_qid_mapping(ring, qid, &ring->q_map);
+	fuse_uring_cpu_qid_mapping(ring, qid, &ring->q_map, -1);
 
 	spin_unlock(&fc->lock);
 
