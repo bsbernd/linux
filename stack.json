@@ -1,17 +1,17 @@
 {
   "version": 5,
-  "prev": "911c215c27fd85fc5eb35c479e5e7a56a8faf36b",
-  "head": "9a8b6df0de4be1ed1d127ef47cbef1cc75fe6b7c",
+  "prev": "bd1119dc5ddc3b4394ec55f0b7e1731845d16cb1",
+  "head": "fcbb5ff48eeac3d94d1608b539b2745d8a3a0aed",
   "applied": [
     "io_uring-kbuf-refactor",
     "io_uring-kbuf-rename",
     "io_uring-kbuf-add-support-for",
     "io_uring-kbuf-add-mmap-support",
     "io_uring-kbuf-support-kernel",
-    "io_uring-kbuf-add-buffer-ring"
+    "io_uring-kbuf-add-buffer-ring",
+    "io_uring-kbuf-add-recycling"
   ],
   "unapplied": [
-    "io_uring-kbuf-add-recycling",
     "io_uring-kbuf-add",
     "io_uring-kbuf-export",
     "io_uring-kbuf-return-buffer-id",
