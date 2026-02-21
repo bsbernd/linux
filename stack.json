@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "69d375b8201447ae1c582fc6c23a015de5c2a61a",
-  "head": "8ec0fbede706a809f02d5917d0f7f5b7b80ef9d1",
+  "prev": "81c8856a5001ac1ff30fc767652234fa376f6286",
+  "head": "fafe1ea90a79ef776af5029c0d96dab96a4926ba",
   "applied": [
     "rfc-fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
@@ -10,10 +10,10 @@
     "fuse-increase-the-default-max",
     "fuse-invalidate-inode-aliases",
     "fuse-uring-pin-the-user-buffer",
-    "fuse-add-dlm_lock-opcode"
+    "fuse-add-dlm_lock-opcode",
+    "fuse-renumber-fuse_dlm_wb_lock"
   ],
   "unapplied": [
-    "fuse-renumber-fuse_dlm_wb_lock",
     "fuse-send-dlm_wb_lock-request",
     "fuse-change-fuse-dlm_lock-to",
     "fuse-use-fuser-server-provided",
