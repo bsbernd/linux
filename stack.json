@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "e03a79d0e737a7b10f2b5314bbecfa297cd2a1b9",
-  "head": "0cb5f76bfeba9629c9bb74d2dbbfec6fef05e144",
+  "prev": "8971636e6610a90854c4a5230484a832b142f1f8",
+  "head": "f6740ff1102db47d420612eeeaf4803bce45caa4",
   "applied": [
     "io_uring-kbuf-refactor",
     "io_uring-kbuf-rename",
@@ -15,10 +15,10 @@
     "io_uring-kbuf-return-buffer-id",
     "io_uring-cmd-set-selected",
     "io_uring-add",
-    "io_uring-rsrc-rename"
+    "io_uring-rsrc-rename",
+    "io_uring-rsrc-split"
   ],
   "unapplied": [
-    "io_uring-rsrc-split",
     "io_uring-rsrc-allow-buffer",
     "io_uring-rsrc-add",
     "fuse-refactor-io-uring-logic",
