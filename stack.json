@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "490888852f393555fe938cf69df76c5e2f9e52a2",
-  "head": "6e686493afa31297c79ef76a80b970307316881d",
+  "prev": "53d5974f281ae4be754710e75b3674e4818602d9",
+  "head": "9485024e89f15dae0a96100c96dc9291614e6537",
   "applied": [
     "rfc-fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
@@ -23,10 +23,10 @@
     "fuse-fix-memory-leak-in-fuse",
     "fuse-io-uring-add-queue-length",
     "fuse-io-uring-rename-ring",
-    "fuse-io-uring-use-bitmaps-to"
+    "fuse-io-uring-use-bitmaps-to",
+    "fuse-io-uring-allow-reduced"
   ],
   "unapplied": [
-    "fuse-io-uring-allow-reduced",
     "fuse-io-uring-queue-background",
     "fuse-add-retry-attempts-for",
     "fuse-invalidate-the-page-cache",
