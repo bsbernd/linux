@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "b384d9473a07b292a96e31cab4f7e08ad51849f1",
-  "head": "fdbf84c881f0964828245078fa84200cfade343f",
+  "prev": "103322cc0d00d86d9d0ea392a329562c4b5e0b78",
+  "head": "b45f1e655e41056897356b597b50427a39329fad",
   "applied": [
     "rfc-fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
@@ -13,10 +13,10 @@
     "fuse-add-dlm_lock-opcode",
     "fuse-renumber-fuse_dlm_wb_lock",
     "fuse-send-dlm_wb_lock-request",
-    "fuse-change-fuse-dlm_lock-to"
+    "fuse-change-fuse-dlm_lock-to",
+    "fuse-use-fuser-server-provided"
   ],
   "unapplied": [
-    "fuse-use-fuser-server-provided",
     "fuse-allow-read_folio-to-retry",
     "fuse-flush-pending-fuse-events",
     "fuse-refactor-io-uring-bg",
