@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "7060b89614c3fd4450395e8607bfbe6da0cb67de",
-  "head": "40321d96f67e7b8606cf680c7f846462021e618a",
+  "prev": "e08d709a52fd109bd459893d144c1deb6ea1d8aa",
+  "head": "c0729bba6c6d0c1691407999173495865d535888",
   "applied": [
     "rfc-fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
@@ -41,10 +41,10 @@
     "fuse-compounds-fix-includes",
     "create-workflow-the-create-pr",
     "fix-the-github-actions-pr",
-    "remove-the-pull_request_target"
+    "remove-the-pull_request_target",
+    "fuse-make-compounds-a-module"
   ],
   "unapplied": [
-    "fuse-make-compounds-a-module",
     "fuse-fix-the-reduced-queue"
   ],
   "hidden": [],
