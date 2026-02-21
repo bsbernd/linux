@@ -1,0 +1,27 @@
+Bottom: cae7b1457d1f2def901b5f478dfd49e4ac408247
+Top:    cae7b1457d1f2def901b5f478dfd49e4ac408247
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 17:57:07 +0100
+
+fuse: {io-uring} Prefer the current core over mapping
+
+Mapping might point to a totally different core due to
+random assignment. For performance using the current
+core might be beneficial
+
+Example (with core binding)
+
+unpatched WRITE: bw=841MiB/s
+patched   WRITE: bw=1363MiB/s
+
+With
+fio --name=test --ioengine=psync --direct=1 \
+    --rw=write --bs=1M --iodepth=1 --numjobs=1 \
+    --filename_format=/redfs/testfile.\$jobnum --size=100G \
+    --thread --create_on_open=1 --runtime=30s --cpus_allowed=1
+
+In order to get the good number `--cpus_allowed=1` is needed.
+This could be improved by a future change that avoids
+cpu migration in fuse_request_end() on wake_up() call.
+
+(imported from commit 32e0073d67cfc7bd602dc7675ae71fa825b04362)
