@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "8f6034860706bb494da86ee2f49e348b147fd4de",
-  "head": "b18b506183080ed880bc4f62044f1192d7d4d54b",
+  "prev": "41e194c1f82195ca67f821b36887d57ce94f29fd",
+  "head": "d1f4a0dac1f3a7cbd4d07f557ef4cfbb13c8de20",
   "applied": [
     "rfc-fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
@@ -15,10 +15,10 @@
     "fuse-send-dlm_wb_lock-request",
     "fuse-change-fuse-dlm_lock-to",
     "fuse-use-fuser-server-provided",
-    "fuse-allow-read_folio-to-retry"
+    "fuse-allow-read_folio-to-retry",
+    "fuse-flush-pending-fuse-events"
   ],
   "unapplied": [
-    "fuse-flush-pending-fuse-events",
     "fuse-refactor-io-uring-bg",
     "fuse-flush-the-io-uring-bg",
     "fuse-make-foffset-alignment",
