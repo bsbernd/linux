@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "34471c8d6531e4865714e81f6543b25d905992d2",
-  "head": "ac2d953dc7d997b0d967b3bc1522655b70838e87",
+  "prev": "5976b80147833a5a725a4ea1b08ff9849bf4fbe6",
+  "head": "239b013e150a8f3e11f71aacd4144275470695fd",
   "applied": [
     "rfc-fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
@@ -28,10 +28,10 @@
     "fuse-io-uring-queue-background",
     "fuse-add-retry-attempts-for",
     "fuse-invalidate-the-page-cache",
-    "fuse-always-flush-the-page"
+    "fuse-always-flush-the-page",
+    "fuse-fetch-a-queued-fuse"
   ],
   "unapplied": [
-    "fuse-fetch-a-queued-fuse",
     "fuse-add-compound-command-to",
     "fuse-simplify-compound",
     "red-34640-fix-a-startup",
