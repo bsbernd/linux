@@ -1,0 +1,28 @@
+Bottom: 779dcc75a2e1c4e278e04fe9411b9d9f1d7a2a38
+Top:    e0ce7a79721ac6e6151633be3b353e3f762431f7
+Author: Jouni Högander <jouni.hogander@intel.com>
+Date:   2026-02-07 00:06:44 +0100
+
+drm/i915/psr: Underrun on idle PSR wa only when pkgc latency > delayed vblank
+
+BugLink: https://bugs.launchpad.net/bugs/2131066
+
+Underrun on idle PSR workaround (Wa_16025596647) is supposed to be
+applied only when pkg c latency > delayed vblank. Currently we are
+applying it always when other criterias are met.
+
+Fix this by adding new boolean flag which is supposed to be set when
+calculating watermark levels and pkgc latency > delayed vblank is
+detected. currently this scenario is blocked but might be added
+later. Due to this add also TODO comment into
+skl_max_wm_level_for_vblank.
+
+Bspec: 74151
+Signed-off-by: Jouni Högander <jouni.hogander@intel.com>
+Reviewed-by: Uma Shankar <uma.shankar@intel.com>
+Link: https://lore.kernel.org/r/20250519075223.443266-1-jouni.hogander@intel.com
+(cherry picked from commit 9b1795e9b0ae6d8b2c50987048170f77d0dc0300)
+Signed-off-by: Chia-Lin Kao (AceLan) <acelan.kao@canonical.com>
+Acked-by: Benjamin Wheeler <benjamin.wheeler@canonical.com>
+Acked-by: Bethany Jamison <bethany.jamison@canonical.com>
+Signed-off-by: Edoardo Canepa <edoardo.canepa@canonical.com>

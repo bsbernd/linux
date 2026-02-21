@@ -1,0 +1,9 @@
+Bottom: 1eef32c68a067dc2171ee5a8bc54f3f5390f0977
+Top:    8a17929fcaaecbec584fc357e0fc8d46112449f4
+Author: Mehmet Basaran <mehmet.basaran@canonical.com>
+Date:   2026-02-13 02:39:41 +0300
+
+UBUNTU: [Packaging] debian.hwe-6.17/dkms-versions -- update from kernel-versions (main/2026.02.09)
+
+BugLink: https://bugs.launchpad.net/bugs/1786013
+Signed-off-by: Mehmet Basaran <mehmet.basaran@canonical.com>

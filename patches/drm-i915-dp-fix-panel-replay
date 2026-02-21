@@ -1,0 +1,34 @@
+Bottom: 7aa61234cf08d4f42913d925604d966000f558b6
+Top:    344df563f6ef3ffe6309d4214938ef8cdbf8e117
+Author: Imre Deak <imre.deak@intel.com>
+Date:   2026-02-07 00:06:45 +0100
+
+drm/i915/dp: Fix panel replay when DSC is enabled
+
+BugLink: https://bugs.launchpad.net/bugs/2131066
+
+Prevent enabling panel replay if the sink doesn't support this due to
+DSC being enabled.
+
+Panel replay has two modes, updating full frames or only selected
+regions of the frame. If the sink doesn't support Panel Replay in full
+frame update mode with DSC prevent Panel Replay completely if DSC is
+enabled. If the sink doesn't support Panel Replay only in the selective
+update mode while DSC is enabled, it will still support Panel Replay in
+the full frame update mode, so only prevent selective updates in this
+case.
+
+v2:
+- Use Panel Replay instead of PR in debug prints. (Jouni)
+- Rebase on change tracking the link DSC state in the crtc state.
+
+Cc: Jouni Högander <jouni.hogander@intel.com>
+Closes: https://gitlab.freedesktop.org/drm/i915/kernel/-/issues/14869
+Reviewed-by: Jouni Högander <jouni.hogander@intel.com>
+Signed-off-by: Imre Deak <imre.deak@intel.com>
+Link: https://lore.kernel.org/r/20251015161934.262108-8-imre.deak@intel.com
+(cherry picked from commit c390bf07961b3a39f3417d75850a4e721b87e595)
+Signed-off-by: Chia-Lin Kao (AceLan) <acelan.kao@canonical.com>
+Acked-by: Benjamin Wheeler <benjamin.wheeler@canonical.com>
+Acked-by: Bethany Jamison <bethany.jamison@canonical.com>
+Signed-off-by: Edoardo Canepa <edoardo.canepa@canonical.com>

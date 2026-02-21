@@ -1,0 +1,14 @@
+Bottom: 14b6f3ac959d3df9822496006b7ce87aa62b69e6
+Top:    8b282b1a2ff790b68b11a810d68c3fb0d2d12e83
+Author: Stefan Bader <stefan.bader@canonical.com>
+Date:   2026-02-13 02:08:45 +0300
+
+UBUNTU: [Packaging] Bump rust version to 1.82
+
+All rust compiler package have to be at least version 1.82 to allow
+enabling rust for amd64 and arm64.
+Change the make rules file and also the dependencies in the control
+file.
+
+Ignore: yes
+Signed-off-by: Stefan Bader <stefan.bader@canonical.com>

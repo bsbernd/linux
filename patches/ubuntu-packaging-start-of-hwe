@@ -1,0 +1,9 @@
+Bottom: 47aa2d13c7d8b765c5c993ed7f2fe329b3989eee
+Top:    b831b9b6842372dd99c7807e422acb67b501e7ee
+Author: Stefan Bader <stefan.bader@canonical.com>
+Date:   2026-02-13 02:08:44 +0300
+
+UBUNTU: [Packaging] Start of hwe-6.17 kernel
+
+Ignore: yes
+Signed-off-by: Stefan Bader <stefan.bader@canonical.com>

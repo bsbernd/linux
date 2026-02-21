@@ -1,0 +1,34 @@
+Bottom: 7f91feb25dbf2c7cae57cc519cae9fd756012a12
+Top:    8e8aa41b5ac4f5c39e5b18907f23cf49202f188e
+Author: Kiran K <kiran.k@intel.com>
+Date:   2026-02-07 00:06:47 +0100
+
+Bluetooth: btintel_pcie: Add id of Scorpious, Panther Lake-H484
+
+BugLink: https://bugs.launchpad.net/bugs/2116169
+
+sudo lspci -v -k -d 8086:e376
+00:14.7 Bluetooth: Intel Corporation Device e376
+        Subsystem: Intel Corporation Device 0011
+        Flags: bus master, fast devsel, latency 0, IRQ 16, IOMMU group 14
+        Memory at 14815368000 (64-bit, non-prefetchable) [size=16K]
+        Capabilities: [c8] Power Management version 3
+        Capabilities: [d0] MSI: Enable- Count=1/1 Maskable- 64bit+
+        Capabilities: [40] Express Root Complex Integrated Endpoint, MSI 00
+        Capabilities: [80] MSI-X: Enable+ Count=32 Masked-
+        Capabilities: [100] Latency Tolerance Reporting
+        Kernel driver in use: btintel_pcie
+        Kernel modules: btintel_pcie
+
+Reviewed-by: Paul Menzel <pmenzel@molgen.mpg.de>
+Signed-off-by: Kiran K <kiran.k@intel.com>
+Signed-off-by: Luiz Augusto von Dentz <luiz.von.dentz@intel.com>
+(cherry picked from commit 04efaba1d7615a000195762e9f1dac69bd3b089a)
+Signed-off-by: You-Sheng Yang <vicamo.yang@canonical.com>
+Acked-by: Bethany Jamison <bethany.jamison@canonical.com>
+Acked-by: Stefan Bader <stefan.bader@canonical.com>
+Acked-by: Bethany Jamison <bethany.jamison@canonical.com>
+Acked-by: Stefan Bader <stefan.bader@canonical.com>
+Acked-by: Bethany Jamison <bethany.jamison@canonical.com>
+Acked-by: Stefan Bader <stefan.bader@canonical.com>
+Signed-off-by: Edoardo Canepa <edoardo.canepa@canonical.com>

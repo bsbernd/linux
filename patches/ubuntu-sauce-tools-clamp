@@ -1,0 +1,15 @@
+Bottom: 0319002b5d7fff4bb219c8fe3f31371776db6897
+Top:    9ac2e62f1ec6b739e14a4f7f2d58ddd53770625f
+Author: Stefan Bader <stefan.bader@canonical.com>
+Date:   2026-02-13 02:08:49 +0300
+
+UBUNTU: SAUCE: tools: clamp sizeof in perf_cpu_map__merge
+
+BugLink: https://bugs.launchpad.net/bugs/2132312
+
+For some odd reason trying to pass an "(int) * (size_t)" to malloc is
+throwing an exeption in the argument checking for malloc. This only
+happens on s390x and ppc64el. Until properly understood we are hacking
+around this by casting the return value of sizeof() to an unsigned int.
+
+Signed-off-by: Stefan Bader <stefan.bader@canonical.com>

@@ -1,0 +1,9 @@
+Bottom: e386fe1bdd6ed5d2c351ff193e1e4c9b2adbfff4
+Top:    8de85255f0d5c5000f407486c48be450837d15b2
+Author: Stefan Bader <stefan.bader@canonical.com>
+Date:   2026-02-13 02:08:49 +0300
+
+UBUNTU: [Packaging] update variants
+
+BugLink: https://bugs.launchpad.net/bugs/1786013
+Signed-off-by: Stefan Bader <stefan.bader@canonical.com>

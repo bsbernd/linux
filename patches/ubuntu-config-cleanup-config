@@ -1,0 +1,14 @@
+Bottom: 92a67410151b25504c91bc16b9131be31a99456e
+Top:    980048feb6a0a0a7cccf6cb550e319c88d60a6d0
+Author: Stefan Bader <stefan.bader@canonical.com>
+Date:   2026-02-13 02:08:46 +0300
+
+UBUNTU: [Config] Cleanup config (arm64 only changes)
+
+Some options changed to be arm64 only. This causes some drivers to be no
+longer available for armhf. This results in warnings when running
+updateconfigs. Should be fixed in the parent kernel but for now add the
+modifications to the HWE kernel.
+
+Ignore: yes
+Signed-off-by: Stefan Bader <stefan.bader@canonical.com>

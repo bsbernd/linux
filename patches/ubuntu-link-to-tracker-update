@@ -1,0 +1,10 @@
+Bottom: 8e8aa41b5ac4f5c39e5b18907f23cf49202f188e
+Top:    0711cd96d6e2e8cd309a14b3c6299cefe06a9399
+Author: Edoardo Canepa <edoardo.canepa@canonical.com>
+Date:   2026-02-07 10:58:31 +0100
+
+UBUNTU: link-to-tracker: update tracking bug
+
+BugLink: https://bugs.launchpad.net/bugs/2141148
+Properties: no-test-build
+Signed-off-by: Edoardo Canepa <edoardo.canepa@canonical.com>

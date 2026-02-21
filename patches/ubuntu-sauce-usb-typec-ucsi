@@ -1,0 +1,103 @@
+Bottom: ca30080645b7a47eaf0c686d63c296d79206b711
+Top:    504c27198a4650e68dff38ba80f174f8b8e767c6
+Author: Chia-Lin Kao (AceLan) <acelan.kao@canonical.com>
+Date:   2026-02-07 00:06:46 +0100
+
+UBUNTU: SAUCE: usb: typec: ucsi: Fix workqueue destruction race during connector cleanup
+
+BugLink: https://bugs.launchpad.net/bugs/2127764
+
+During UCSI initialization and operation, there is a race condition where
+delayed work items can be scheduled but attempt to queue work after the
+workqueue has been destroyed. This occurs in multiple code paths.
+
+The race occurs when:
+1. ucsi_partner_task() or ucsi_poll_worker() schedule delayed work
+2. Connector cleanup paths call destroy_workqueue()
+3. Previously scheduled delayed work timers fire after destruction
+4. This triggers warnings and crashes in __queue_work()
+
+The issue is timing-sensitive and typically manifests when:
+- Port registration fails due to PPM timing issues
+- System shutdown/cleanup occurs with pending delayed work
+- Module removal races with active delayed work
+
+[  170.605181] ucsi_acpi USBC000:00: con2: failed to register alt modes
+[  181.868900] ------------[ cut here ]------------
+[  181.868905] workqueue: cannot queue ucsi_poll_worker [typec_ucsi] on wq USBC000:00-con1
+[  181.868918] WARNING: CPU: 1 PID: 0 at kernel/workqueue.c:2255 __queue_work+0x420/0x5a0
+...
+[  181.869062] CPU: 1 UID: 0 PID: 0 Comm: swapper/1 Not tainted 6.17.0-rc7+ #1 PREEMPT(voluntary)
+[  181.869065] Hardware name: Dell Inc. , BIOS xx.xx.xx xx/xx/2025
+[  181.869067] RIP: 0010:__queue_work+0x420/0x5a0
+[  181.869070] Code: 00 00 41 83 e4 01 0f 85 57 fd ff ff 49 8b 77 18 48 8d 93 c0 00 00 00 48 c7 c7 00 8c bc 92 c6 05 27 47 68 02 01 e8 50 24 fd f
+f <0f> 0b e9 32 fd ff ff 0f 0b e9 1d fd ff ff 0f 0b e9 0f fd ff ff 0f
+[  181.869072] RSP: 0018:ffffd53c000acdf8 EFLAGS: 00010046
+[  181.869075] RAX: 0000000000000000 RBX: ffff8ecd0727f200 RCX: 0000000000000000
+[  181.869076] RDX: 0000000000000000 RSI: 0000000000000000 RDI: 0000000000000000
+[  181.869077] RBP: ffffd53c000ace38 R08: 0000000000000000 R09: 0000000000000000
+[  181.869078] R10: 0000000000000000 R11: 0000000000000000 R12: 0000000000000000
+[  181.869079] R13: ffffffff913995e0 R14: ffff8ecc824387a0 R15: ffff8ecc82438780
+[  181.869081] FS:  0000000000000000(0000) GS:ffff8eec0b92f000(0000) knlGS:0000000000000000
+[  181.869083] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  181.869084] CR2: 000005593e67a008 CR3: 0000001f41840002 CR4: 0000000000f72ef0
+[  181.869086] PKRU: 55555554
+[  181.869087] Call Trace:
+[  181.869089]  <IRQ>
+[  181.869093]  ? sched_clock+0x10/0x30
+[  181.869098]  ? __pfx_delayed_work_timer_fn+0x10/0x10
+[  181.869100]  delayed_work_timer_fn+0x19/0x30
+[  181.869102]  call_timer_fn+0x2c/0x150
+[  181.869106]  ? __pfx_delayed_work_timer_fn+0x10/0x10
+[  181.869108]  __run_timers+0x1c6/0x2d0
+[  181.869111]  run_timer_softirq+0x8a/0x100
+[  181.869114]  handle_softirqs+0xe4/0x340
+[  181.869118]  __irq_exit_rcu+0x10e/0x130
+[  181.869121]  irq_exit_rcu+0xe/0x20
+[  181.869124]  sysvec_apic_timer_interrupt+0xa0/0xc0
+[  181.869130]  </IRQ>
+[  181.869131]  <TASK>
+[  181.869132]  asm_sysvec_apic_timer_interrupt+0x1b/0x20                                                                                        [  181.869135] RIP: 0010:cpuidle_enter_state+0xda/0x710
+[  181.869137] Code: 8f f7 fe e8 78 f0 ff ff 8b 53 04 49 89 c7 0f 1f 44 00 00 31 ff e8 86 bf f5 fe 80 7d d0 00 0f 85 22 02 00 00 fb 0f 1f 44 00 0
+0 <45> 85 f6 0f 88 f2 01 00 00 4d 63 ee 49 83 fd 0a 0f 83 d8 04 00 00
+[  181.869139] RSP: 0018:ffffd53c0022be18 EFLAGS: 00000246
+[  181.869140] RAX: 0000000000000000 RBX: ffff8eeb9f8bf880 RCX: 0000000000000000
+[  181.869142] RDX: 0000000000000001 RSI: 0000000000000000 RDI: 0000000000000000
+[  181.869143] RBP: ffffd53c0022be68 R08: 0000000000000000 R09: 0000000000000000
+[  181.869144] R10: 0000000000000000 R11: 0000000000000000 R12: ffffffff93914780
+[  181.869145] R13: 0000000000000002 R14: 0000000000000002 R15: 0000002a583b0b41
+[  181.869148]  ? cpuidle_enter_state+0xca/0x710
+[  181.869151]  cpuidle_enter+0x2e/0x50
+[  181.869156]  call_cpuidle+0x22/0x60
+[  181.869160]  do_idle+0x1dc/0x240
+[  181.869163]  cpu_startup_entry+0x29/0x30
+[  181.869164]  start_secondary+0x128/0x160
+[  181.869167]  common_startup_64+0x13e/0x141
+[  181.869171]  </TASK>
+[  181.869172] ---[ end trace 0000000000000000 ]---
+[  226.924460] workqueue USBC000:00-con1: drain_workqueue() isn't complete after 10 tries
+[  329.470977] ucsi_acpi USBC000:00: error -ETIMEDOUT: PPM init failed
+
+Fix this by:
+1. Creating ucsi_destroy_connector_wq() helper function that safely
+   cancels all pending delayed work before destroying workqueues
+2. Applying the safe cleanup to all three workqueue destruction paths:
+   - ucsi_register_port() error path
+   - ucsi_init() error path
+   - ucsi_unregister() cleanup path
+
+This prevents both the initial queueing on destroyed workqueues and
+retry attempts from running workers, eliminating the timer races.
+
+Fixes: b9aa02ca39a4 ("usb: typec: ucsi: Add polling mechanism for partner tasks like alt mode checking")
+Cc: stable@vger.kernel.org
+Signed-off-by: Chia-Lin Kao (AceLan) <acelan.kao@canonical.com>
+(cherry picked from commit https://lore.kernel.org/lkml/20251218071925.3459787-1-acelan.kao@canonical.com/)
+Signed-off-by: Chia-Lin Kao (AceLan) <acelan.kao@canonical.com>
+Acked-by: Aaron Ma <aaron.ma@canonical.com>
+Acked-by: Bethany Jamison <bethany.jamison@canonical.com>
+Acked-by: Aaron Ma <aaron.ma@canonical.com>
+Acked-by: Bethany Jamison <bethany.jamison@canonical.com>
+Acked-by: Aaron Ma <aaron.ma@canonical.com>
+Acked-by: Bethany Jamison <bethany.jamison@canonical.com>
+Signed-off-by: Edoardo Canepa <edoardo.canepa@canonical.com>

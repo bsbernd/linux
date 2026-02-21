@@ -1,0 +1,12 @@
+Bottom: 8b282b1a2ff790b68b11a810d68c3fb0d2d12e83
+Top:    daecff7291ae65ed7891394c4e964a88b023a0ca
+Author: Stefan Bader <stefan.bader@canonical.com>
+Date:   2026-02-13 02:08:45 +0300
+
+UBUNTU: [Config] Update annotations moving from 6.14 to 6.17
+
+Create a new baseline config with the differences between the old HWE
+kernel and the new one.
+
+Ignore: yes
+Signed-off-by: Stefan Bader <stefan.bader@canonical.com>

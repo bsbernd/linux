@@ -1,0 +1,37 @@
+Bottom: cab60b466854e0dfba26d8f3108e021a7af0b755
+Top:    779dcc75a2e1c4e278e04fe9411b9d9f1d7a2a38
+Author: Imre Deak <imre.deak@intel.com>
+Date:   2026-02-07 00:06:44 +0100
+
+drm/i915/dp_mst: Recompute all MST link CRTCs if DSC gets enabled on the link
+
+BugLink: https://bugs.launchpad.net/bugs/2131066
+
+The state of all the CRTCs on an MST link must be recomputed, if DSC
+gets enabled on any of the CRTCs on the link. For instance an MST
+docking station's Panel Replay capability may depend on whether DSC is
+enabled on any of the dock's streams (aka CRTCs). To assist the Panel
+Replay state computation for a CRTC based on the above, track in the
+CRTC state if DSC is enabled on any CRTC on an MST link.
+
+The intel_link_bw_limits::force_fec_pipes mask is used for a reason
+similar to the above: enable FEC on all CRTCs of a non-UHBR (8b10b) MST
+link if DSC is enabled on any of the link's CRTCs. The FEC enabled state
+for a CRTC doesn't indicate if DSC is enabled on a UHBR MST link (FEC is
+always enabled by the HW for UHBR, hence it's not tracked by the
+intel_crtc_state::fec_enable flag for such links, where this flag is
+always false).
+
+Based on the above, to be able to determine the DSC state on both
+non-UHBR and UHBR MST links, track the more generic DSC-enabled-on-link
+state (instead of the FEC-enabled-on-link state) for each CRTC in
+intel_link_bw_limits.
+
+Signed-off-by: Imre Deak <imre.deak@intel.com>
+Reviewed-by: Jouni Högander <jouni.hogander@intel.com>
+Link: https://lore.kernel.org/r/20251015161934.262108-7-imre.deak@intel.com
+(cherry picked from commit 470b84af457e34cbfa4d2c17dab78746736ab898)
+Signed-off-by: Chia-Lin Kao (AceLan) <acelan.kao@canonical.com>
+Acked-by: Benjamin Wheeler <benjamin.wheeler@canonical.com>
+Acked-by: Bethany Jamison <bethany.jamison@canonical.com>
+Signed-off-by: Edoardo Canepa <edoardo.canepa@canonical.com>
