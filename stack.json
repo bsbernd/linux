@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "4ccc71303472d79f4468682ba3e6d7fc5c99a89c",
-  "head": "f15b501eb9c88c082783b01afb8dc81e0a0dded9",
+  "prev": "ac3ce18e3dccc609ff9e26eadea936ab5478c146",
+  "head": "e1df8822768b69ae301ff7c2b5f783cbe48a1670",
   "applied": [
     "rfc-fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
@@ -32,10 +32,10 @@
     "fuse-fetch-a-queued-fuse",
     "fuse-add-compound-command-to",
     "fuse-simplify-compound",
-    "red-34640-fix-a-startup"
+    "red-34640-fix-a-startup",
+    "fuse-move-ring-queues_refs"
   ],
   "unapplied": [
-    "fuse-move-ring-queues_refs",
     "fs-fuse-fix-potential-memory",
     "fuse-fix-io-uring-list",
     "fuse-fix-missing-numa_q_map",
