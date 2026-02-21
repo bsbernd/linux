@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "16bd7592f0929da1e37dc1d37a8eea4ada823820",
-  "head": "777f752f25bf4cfc7129f16e1fd4de378f1a0b6f",
+  "prev": "c1b11b24f24b37b2b7f4a30f7304aaa2b26a42fa",
+  "head": "dd372126b42d0618ef680cd23918cb15a52d21aa",
   "applied": [
     "rfc-fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
@@ -36,10 +36,10 @@
     "fuse-move-ring-queues_refs",
     "fs-fuse-fix-potential-memory",
     "fuse-fix-io-uring-list",
-    "fuse-fix-missing-numa_q_map"
+    "fuse-fix-missing-numa_q_map",
+    "fuse-allow-synchronous"
   ],
   "unapplied": [
-    "fuse-allow-synchronous",
     "fuse-compounds-fix-includes",
     "create-workflow-the-create-pr",
     "fix-the-github-actions-pr",
