@@ -1,9 +1,0 @@
-Bottom: 9ac2e62f1ec6b739e14a4f7f2d58ddd53770625f
-Top:    e386fe1bdd6ed5d2c351ff193e1e4c9b2adbfff4
-Author: Stefan Bader <stefan.bader@canonical.com>
-Date:   2026-02-13 02:08:49 +0300
-
-UBUNTU: [Packaging] update Ubuntu.md
-
-BugLink: https://bugs.launchpad.net/bugs/1786013
-Signed-off-by: Stefan Bader <stefan.bader@canonical.com>

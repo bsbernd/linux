@@ -1,9 +1,0 @@
-Bottom: 0711cd96d6e2e8cd309a14b3c6299cefe06a9399
-Top:    465c22cb45ba1c9fc979d5bad01572802f5e80ff
-Author: Edoardo Canepa <edoardo.canepa@canonical.com>
-Date:   2026-02-07 11:01:44 +0100
-
-UBUNTU: [Packaging] debian.master/dkms-versions -- update from kernel-versions (main/2026.02.09)
-
-BugLink: https://bugs.launchpad.net/bugs/1786013
-Signed-off-by: Edoardo Canepa <edoardo.canepa@canonical.com>
