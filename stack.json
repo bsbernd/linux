@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "ea2057e3b3f343debb3fee624ce1cc07d815d6ba",
-  "head": "989f9afb184fc01f00f0fdb2891e4a2a852db6ea",
+  "prev": "e12da036bb93c2a0885d8fb5aa993e8d0b88d9be",
+  "head": "dd7c60f1518afeddb3e387d4d97491baf1f49d9e",
   "applied": [
     "rfc-fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
@@ -44,11 +44,15 @@
     "remove-the-pull_request_target",
     "fuse-make-compounds-a-module",
     "fuse-fix-the-reduced-queue",
-    "fuse-io-uring-Prefer-the"
+    "fuse-io-uring-Prefer-the",
+    "Fix-the-compiling-error-on"
   ],
   "unapplied": [],
   "hidden": [],
   "patches": {
+    "Fix-the-compiling-error-on": {
+      "oid": "dd7c60f1518afeddb3e387d4d97491baf1f49d9e"
+    },
     "create-workflow-the-create-pr": {
       "oid": "cc982deab3f92cb5355de34105a97b8c86a5667a"
     },
