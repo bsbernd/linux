@@ -1,8 +1,9 @@
 {
   "version": 5,
-  "prev": "9bc764702d8e106e8b55a0d08d94012e3b6fef0c",
-  "head": "71ca7e838129aba46af4a20fb103abcbf61c8393",
-  "applied": [
+  "prev": "b168aed9318d361e7330be6056ed76cc0147e51b",
+  "head": "728676476847c90658e5229e0b148bbfd2be5b14",
+  "applied": [],
+  "unapplied": [
     "drm-i915-dp_mst-reuse-the-dp",
     "drm-i915-dp_mst-track-dsc",
     "drm-i915-dp_mst-recompute-all",
@@ -49,7 +50,6 @@
     "ubuntu-packaging-debian.hwe-2",
     "ubuntu-ubuntu-hwe-6.17-6.17.4"
   ],
-  "unapplied": [],
   "hidden": [],
   "patches": {
     "bluetooth-btintel_pcie-add": {
