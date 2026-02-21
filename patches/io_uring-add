@@ -1,0 +1,27 @@
+Bottom: c130f550bee17f9efecd72b5e25b0167580e7708
+Top:    c6b241d8d8e3c5d204cd9c06644e78b498cd737e
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:19 -0800
+
+io_uring: add io_uring_fixed_index_get() and io_uring_fixed_index_put()
+
+Add two new helpers, io_uring_fixed_index_get() and
+io_uring_fixed_index_put(). io_uring_fixed_index_get() constructs an
+iter for a fixed buffer at a given index and acquires a refcount on
+the underlying node. io_uring_fixed_index_put() decrements this
+refcount. The caller is responsible for ensuring
+io_uring_fixed_index_put() is properly called for releasing the refcount
+after it is done using the iter it obtained through
+io_uring_fixed_index_get().
+
+The struct io_rsrc_node pointer needs to be returned in
+io_uring_fixed_index_get() because the buffer at the index may be
+unregistered/replaced in the meantime between this and the
+io_uring_fixed_index_put() call. io_uring_fixed_index_put() takes in the
+struct io_rsrc_node pointer as an arg.
+
+This is a preparatory patch needed for fuse-over-io-uring support, as
+the metadata for fuse requests will be stored at the last index, which
+will be different from the buf index set on the sqe.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

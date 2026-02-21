@@ -1,0 +1,15 @@
+Bottom: cb4aca290e6fbf88560680fb5248c65e2ab7458f
+Top:    b4aac838c1b4036faea06258f3a46d455d4c7208
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:19 -0800
+
+io_uring/kbuf: add io_uring_is_kmbuf_ring()
+
+io_uring_is_kmbuf_ring() returns true if there is a kernel-managed
+buffer ring at the specified buffer group.
+
+This is a preparatory patch for upcoming fuse kernel-managed buffer
+support, which needs to ensure the buffer ring registered by the server
+is a kernel-managed buffer ring.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

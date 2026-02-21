@@ -1,0 +1,15 @@
+Bottom: 238cccd38e44b35d441f670da7cba1b2360fed7a
+Top:    b3b7b1805913cd1b64a9a0d56f4b3cdb1f88694c
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:18 -0800
+
+io_uring/kbuf: rename io_unregister_pbuf_ring() to io_unregister_buf_ring()
+
+Use the more generic name io_unregister_buf_ring() as this function will
+be used for unregistering both provided buffer rings and kernel-managed
+buffer rings.
+
+This is a preparatory change for upcoming kernel-managed buffer ring
+support.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

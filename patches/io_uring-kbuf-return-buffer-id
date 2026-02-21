@@ -1,0 +1,12 @@
+Bottom: 4e4c7b63d89d02426a06c30f2cf71926a930608f
+Top:    7b0d1dabfa6cfe21d2b528558d4cebadde76eeb3
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:19 -0800
+
+io_uring/kbuf: return buffer id in buffer selection
+
+Return the id of the selected buffer in io_buffer_select(). This is
+needed for kernel-managed buffer rings to later recycle the selected
+buffer.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

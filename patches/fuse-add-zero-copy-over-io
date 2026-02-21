@@ -1,0 +1,33 @@
+Bottom: 54077eb640e10c39be1435b9ecc0cb5fe21f1f0e
+Top:    ec4dedb68b874bda0a9c41a06ede9a773d5dc6f8
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:21 -0800
+
+fuse: add zero-copy over io-uring
+
+Implement zero-copy data transfer for fuse over io-uring, eliminating
+memory copies between kernel and userspace for read/write operations.
+
+This is only allowed on privileged servers and requires the server to
+preregister the following:
+a) a sparse buffer corresponding to the queue depth
+b) a fixed buffer at index queue_depth (the tail of the buffers)
+c) a kernel-managed buffer ring
+
+The sparse buffer is where the client's pages reside. The fixed buffer
+at the tail is where the headers (struct fuse_uring_req_header) are
+placed. The kernel-managed buffer ring is where any non-zero-copied args
+reside (eg out headers).
+
+Benchmarks with bs=1M showed approximately the following differences in
+throughput:
+direct randreads: ~20% increase (~2100 MB/s -> ~2600 MB/s)
+buffered randreads: ~25% increase (~1900 MB/s -> 2400 MB/s)
+direct randwrites: no difference (~750 MB/s)
+buffered randwrites: ~10% increase (950 MB/s -> 1050 MB/s)
+
+The benchmark was run using fio on the passthrough_hp server:
+fio --name=test_run --ioengine=sync --rw=rand{read,write} --bs=1M
+--size=1G --numjobs=2 --ramp_time=30 --group_reporting=1
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

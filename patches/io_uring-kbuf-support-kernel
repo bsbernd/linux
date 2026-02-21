@@ -1,0 +1,15 @@
+Bottom: 370144bb884c06305c57a697909bd44f14007010
+Top:    e6d7b0941889f569545e3e3545a99c0884e12100
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:18 -0800
+
+io_uring/kbuf: support kernel-managed buffer rings in buffer selection
+
+Allow kernel-managed buffers to be selected. This requires modifying the
+io_br_sel struct to separate the fields for address and val, since a
+kernel address cannot be distinguished from a negative val when error
+checking.
+
+Auto-commit any selected kernel-managed buffer.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

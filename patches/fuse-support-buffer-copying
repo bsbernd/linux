@@ -1,0 +1,16 @@
+Bottom: c3fe2c5e4b70ae6c683deadf4290c5c35e087d7d
+Top:    2124db6986627b0e111abb0cc80cd0c9a315fcb8
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:21 -0800
+
+fuse: support buffer copying for kernel addresses
+
+This is a preparatory patch needed to support kernel-managed ring
+buffers in fuse-over-io-uring. For kernel-managed ring buffers, we get
+the vmapped address of the buffer which we can directly use.
+
+Currently, buffer copying in fuse only supports extracting underlying
+pages from an iov iter and kmapping them. This commit allows buffer
+copying to work directly on a kaddr.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

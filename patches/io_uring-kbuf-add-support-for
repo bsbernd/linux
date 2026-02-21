@@ -1,0 +1,28 @@
+Bottom: b3b7b1805913cd1b64a9a0d56f4b3cdb1f88694c
+Top:    a1057118567594987db52d48a749fed4c115db07
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:18 -0800
+
+io_uring/kbuf: add support for kernel-managed buffer rings
+
+Add support for kernel-managed buffer rings (kmbuf rings), which allow
+the kernel to allocate and manage the backing buffers for a buffer
+ring, rather than requiring the application to provide and manage them.
+
+This introduces two new registration opcodes:
+- IORING_REGISTER_KMBUF_RING: Register a kernel-managed buffer ring
+- IORING_UNREGISTER_KMBUF_RING: Unregister a kernel-managed buffer ring
+
+The existing io_uring_buf_reg structure is extended with a union to
+support both application-provided buffer rings (pbuf) and kernel-managed
+buffer rings (kmbuf):
+- For pbuf rings: ring_addr specifies the user-provided ring address
+- For kmbuf rings: buf_size specifies the size of each buffer. buf_size
+  must be non-zero and page-aligned.
+
+The implementation follows the same pattern as pbuf ring registration,
+reusing the validation and buffer list allocation helpers introduced in
+earlier refactoring. The IOBL_KERNEL_MANAGED flag marks buffer lists as
+kernel-managed for appropriate handling in the I/O path.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

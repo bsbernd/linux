@@ -1,9 +1,111 @@
 {
   "version": 5,
-  "prev": null,
+  "prev": "424bd19b5d833dbccea4595a00f4a1555659ade7",
   "head": "00943dc8d06170518ae44bddf15393e92583ad98",
-  "applied": [],
+  "applied": [
+    "io_uring-kbuf-refactor",
+    "io_uring-kbuf-rename",
+    "io_uring-kbuf-add-support-for",
+    "io_uring-kbuf-add-mmap-support",
+    "io_uring-kbuf-support-kernel",
+    "io_uring-kbuf-add-buffer-ring",
+    "io_uring-kbuf-add-recycling",
+    "io_uring-kbuf-add",
+    "io_uring-kbuf-export",
+    "io_uring-kbuf-return-buffer-id",
+    "io_uring-cmd-set-selected",
+    "io_uring-add",
+    "io_uring-rsrc-rename",
+    "io_uring-rsrc-split",
+    "io_uring-rsrc-allow-buffer",
+    "io_uring-rsrc-add",
+    "fuse-refactor-io-uring-logic",
+    "fuse-refactor-io-uring-header",
+    "fuse-refactor-io-uring-header-1",
+    "fuse-use-enum-types-for-header",
+    "fuse-refactor-setting-up-copy",
+    "fuse-support-buffer-copying",
+    "fuse-add-io-uring-kernel",
+    "fuse-add-zero-copy-over-io",
+    "docs-fuse-add-io-uring-bufring"
+  ],
   "unapplied": [],
   "hidden": [],
-  "patches": {}
+  "patches": {
+    "docs-fuse-add-io-uring-bufring": {
+      "oid": "00943dc8d06170518ae44bddf15393e92583ad98"
+    },
+    "fuse-add-io-uring-kernel": {
+      "oid": "f0db4cdb1289fe49562cc26a9ae598e370e653b4"
+    },
+    "fuse-add-zero-copy-over-io": {
+      "oid": "34db437a46dfb576bb1472387c27ac18f3a7484a"
+    },
+    "fuse-refactor-io-uring-header": {
+      "oid": "406626f140fd60e068f0256c81818435fa995b8b"
+    },
+    "fuse-refactor-io-uring-header-1": {
+      "oid": "dc5792e251124d422eea35dd3d6b3b3271489f1d"
+    },
+    "fuse-refactor-io-uring-logic": {
+      "oid": "dcbd86dc10115d483d27cde1deaceb04335daa89"
+    },
+    "fuse-refactor-setting-up-copy": {
+      "oid": "d0ec7875b8ab213740a5d6c2b7499e58f6dc5615"
+    },
+    "fuse-support-buffer-copying": {
+      "oid": "570d484e4a7d8080b91e90aa57dad5467d91ed4b"
+    },
+    "fuse-use-enum-types-for-header": {
+      "oid": "eba78b568ee8935eca48c0113b1679dcb8327fed"
+    },
+    "io_uring-add": {
+      "oid": "e80ad0b6720e1f8ea2373c9cce105d1a39c41244"
+    },
+    "io_uring-cmd-set-selected": {
+      "oid": "be789753bf3dee6192c1d8b4adf29598950ce2f5"
+    },
+    "io_uring-kbuf-add": {
+      "oid": "cdff8d7594f5eba72317ae92531b4b13abb2e079"
+    },
+    "io_uring-kbuf-add-buffer-ring": {
+      "oid": "9a8b6df0de4be1ed1d127ef47cbef1cc75fe6b7c"
+    },
+    "io_uring-kbuf-add-mmap-support": {
+      "oid": "48c9bad28ac69a6a0379241bb9c93f67553117ce"
+    },
+    "io_uring-kbuf-add-recycling": {
+      "oid": "fcbb5ff48eeac3d94d1608b539b2745d8a3a0aed"
+    },
+    "io_uring-kbuf-add-support-for": {
+      "oid": "3d1d49fca534c2857fe5e084612470b9d729ade8"
+    },
+    "io_uring-kbuf-export": {
+      "oid": "c1b3e7a62a24adcc97d1d7e0a2a2442f88bd4b83"
+    },
+    "io_uring-kbuf-refactor": {
+      "oid": "8999039ea58bcd35f3737dee5f42722a0d6ad07a"
+    },
+    "io_uring-kbuf-rename": {
+      "oid": "ffb44ecb513e972f7083ee144d6df3c472093a83"
+    },
+    "io_uring-kbuf-return-buffer-id": {
+      "oid": "6501532981fcb83605bf1b37eda5fa78b0c6cdb3"
+    },
+    "io_uring-kbuf-support-kernel": {
+      "oid": "840a1a51fd6af7fe26be6014b5c87e40974070d6"
+    },
+    "io_uring-rsrc-add": {
+      "oid": "cb9c31ef5e18254f75a3cde2eb1abf6f897e45dd"
+    },
+    "io_uring-rsrc-allow-buffer": {
+      "oid": "e7ff3829169738f47e4c3b5114305350d4fd06d4"
+    },
+    "io_uring-rsrc-rename": {
+      "oid": "0cb5f76bfeba9629c9bb74d2dbbfec6fef05e144"
+    },
+    "io_uring-rsrc-split": {
+      "oid": "f6740ff1102db47d420612eeeaf4803bce45caa4"
+    }
+  }
 }

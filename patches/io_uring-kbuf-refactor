@@ -1,0 +1,19 @@
+Bottom: 7034d84f09ee8c239574adec764ddae7594775f0
+Top:    238cccd38e44b35d441f670da7cba1b2360fed7a
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:18 -0800
+
+io_uring/kbuf: refactor io_register_pbuf_ring() logic into generic helpers
+
+Refactor the logic in io_register_pbuf_ring() into generic helpers:
+- io_copy_and_validate_buf_reg(): Copy out user arg and validate user
+  arg and buffer registration parameters
+- io_alloc_new_buffer_list(): Allocate and initialize a new buffer
+  list for the given buffer group ID
+- io_setup_pbuf_ring(): Sets up the physical buffer ring region and
+  handles memory mapping for provided buffer rings
+
+This is a preparatory change for upcoming kernel-managed buffer ring
+support which will need to reuse some of these helpers.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

@@ -1,0 +1,13 @@
+Bottom: 92bcb1ca86631024af98fcbbc5c728070c97a8b0
+Top:    cb4aca290e6fbf88560680fb5248c65e2ab7458f
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:19 -0800
+
+io_uring/kbuf: add recycling for kernel managed buffer rings
+
+Add an interface for buffers to be recycled back into a kernel-managed
+buffer ring.
+
+This is a preparatory patch for fuse over io-uring.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

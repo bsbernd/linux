@@ -1,0 +1,17 @@
+Bottom: 7b0d1dabfa6cfe21d2b528558d4cebadde76eeb3
+Top:    c130f550bee17f9efecd72b5e25b0167580e7708
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:19 -0800
+
+io_uring/cmd: set selected buffer index in __io_uring_cmd_done()
+
+When uring_cmd operations select a buffer, the completion queue entry
+should indicate which buffer was selected.
+
+Set IORING_CQE_F_BUFFER on the completed entry and encode the buffer
+index if a buffer was selected.
+
+This will be needed for fuse, which needs to relay to userspace which
+selected buffer contains the data.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

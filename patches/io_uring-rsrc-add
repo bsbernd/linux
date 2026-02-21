@@ -1,0 +1,13 @@
+Bottom: 94ec42341a5383af5a61e7f1b78199f76bce1f96
+Top:    5dfbcb51f93db28c0a5c17be919bd12d64a851d3
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:20 -0800
+
+io_uring/rsrc: add io_buffer_register_bvec()
+
+Add io_buffer_register_bvec() for registering a bvec array.
+
+This is a preparatory patch for fuse-over-io-uring zero-copy.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Caleb Sander Mateos <csander@purestorage.com>

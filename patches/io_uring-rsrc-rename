@@ -1,0 +1,21 @@
+Bottom: c6b241d8d8e3c5d204cd9c06644e78b498cd737e
+Top:    9b6f7b29f74ad7081ee247db856a3f47700b9916
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:19 -0800
+
+io_uring/rsrc: rename io_buffer_register_bvec()/io_buffer_unregister_bvec()
+
+Currently, io_buffer_register_bvec() takes in a request. In preparation
+for supporting kernel-populated buffers in fuse io-uring (which will
+need to register bvecs directly, not through a struct request), rename
+this to io_buffer_register_request().
+
+A subsequent patch will commandeer the "io_buffer_register_bvec()"
+function name to support registering bvecs directly.
+
+Rename io_buffer_unregister_bvec() to a more generic name,
+io_buffer_unregister(), as both io_buffer_register_request() and
+io_buffer_register_bvec() callers will use it for unregistration.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Caleb Sander Mateos <csander@purestorage.com>

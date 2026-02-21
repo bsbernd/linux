@@ -1,0 +1,11 @@
+Bottom: ec4dedb68b874bda0a9c41a06ede9a773d5dc6f8
+Top:    85be691403a064e74a753640d370dfd1f5c986a0
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:21 -0800
+
+docs: fuse: add io-uring bufring and zero-copy documentation
+
+Add documentation for fuse over io-uring usage of kernel-managed
+bufrings and zero-copy.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

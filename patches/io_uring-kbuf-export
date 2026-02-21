@@ -1,0 +1,16 @@
+Bottom: b4aac838c1b4036faea06258f3a46d455d4c7208
+Top:    4e4c7b63d89d02426a06c30f2cf71926a930608f
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:19 -0800
+
+io_uring/kbuf: export io_ring_buffer_select()
+
+Export io_ring_buffer_select() so that it may be used by callers who
+pass in a pinned bufring without needing to grab the io_uring mutex.
+
+This is a preparatory patch that will be needed by fuse io-uring, which
+will need to select a buffer from a kernel-managed bufring while the
+uring mutex may already be held by in-progress commits, and may need to
+select a buffer in atomic contexts.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

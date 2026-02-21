@@ -1,0 +1,26 @@
+Bottom: 2124db6986627b0e111abb0cc80cd0c9a315fcb8
+Top:    54077eb640e10c39be1435b9ecc0cb5fe21f1f0e
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:21 -0800
+
+fuse: add io-uring kernel-managed buffer ring
+
+Add io-uring kernel-managed buffer ring capability for fuse daemons
+communicating through the io-uring interface.
+
+This has two benefits:
+a) eliminates the overhead of pinning/unpinning user pages and
+translating virtual addresses for every server-kernel interaction
+
+b) reduces the amount of memory needed for the buffers per queue and
+allows buffers to be reused across entries. Incremental buffer
+consumption, when added, will allow a buffer to be used across multiple
+requests.
+
+Buffer ring usage is set on a per-queue basis. In order to use this, the
+daemon needs to have preregistered a kernel-managed buffer ring and a
+fixed buffer at index 0 that will hold all the headers, and set the
+"use_bufring" field during registration. The kernel-managed buffer ring
+will be pinned for the lifetime of the connection.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

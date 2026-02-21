@@ -1,0 +1,15 @@
+Bottom: 9b6f7b29f74ad7081ee247db856a3f47700b9916
+Top:    27c72e404fc67f96d2701ae89532d2a90686dc2a
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:20 -0800
+
+io_uring/rsrc: split io_buffer_register_request() logic
+
+Split the main initialization logic in io_buffer_register_request() into
+a helper function.
+
+This is a preparatory patch for supporting kernel-populated buffers in
+fuse io-uring, which will be reusing this logic.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Caleb Sander Mateos <csander@purestorage.com>

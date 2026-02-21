@@ -1,0 +1,21 @@
+Bottom: e6d7b0941889f569545e3e3545a99c0884e12100
+Top:    92bcb1ca86631024af98fcbbc5c728070c97a8b0
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:18 -0800
+
+io_uring/kbuf: add buffer ring pinning/unpinning
+
+Add kernel APIs to pin and unpin buffer rings, preventing userspace from
+unregistering a buffer ring while it is pinned by the kernel.
+
+This provides a mechanism for kernel subsystems to safely access buffer
+ring contents while ensuring the buffer ring remains valid. A pinned
+buffer ring cannot be unregistered until explicitly unpinned. On the
+userspace side, trying to unregister a pinned buffer will return -EBUSY.
+
+This is a preparatory change for upcoming fuse usage of kernel-managed
+buffer rings. It is necessary for fuse to pin the buffer ring because
+fuse may need to select a buffer in atomic contexts, which it can only
+do so by using the underlying buffer list pointer.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

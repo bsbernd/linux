@@ -1,0 +1,12 @@
+Bottom: 30b7aa8ad8729f595acc8b2f4720a4211088f3a9
+Top:    e6e8d43dbb64677689b0973fde79262d0580dd31
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:20 -0800
+
+fuse: refactor io-uring header copying to ring
+
+Move header copying to ring logic into a new copy_header_to_ring()
+function. This consolidates error handling.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Bernd Schubert <bschubert@ddn.com>

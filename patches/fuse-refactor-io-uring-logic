@@ -1,0 +1,11 @@
+Bottom: 5dfbcb51f93db28c0a5c17be919bd12d64a851d3
+Top:    30b7aa8ad8729f595acc8b2f4720a4211088f3a9
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:20 -0800
+
+fuse: refactor io-uring logic for getting next fuse request
+
+Simplify the logic for getting the next fuse request.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Bernd Schubert <bschubert@ddn.com>

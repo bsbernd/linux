@@ -1,0 +1,25 @@
+Bottom: a1057118567594987db52d48a749fed4c115db07
+Top:    370144bb884c06305c57a697909bd44f14007010
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-20 11:56:18 -0800
+
+io_uring/kbuf: add mmap support for kernel-managed buffer rings
+
+Add support for mmapping kernel-managed buffer rings (kmbuf) to
+userspace, allowing applications to access the kernel-allocated buffers.
+
+Similar to application-provided buffer rings (pbuf), kmbuf rings use the
+buffer group ID encoded in the mmap offset to identify which buffer ring
+to map. The implementation follows the same pattern as pbuf rings.
+
+New mmap offset constants are introduced:
+  - IORING_OFF_KMBUF_RING (0x88000000): Base offset for kmbuf mappings
+  - IORING_OFF_KMBUF_SHIFT (16): Shift value to encode buffer group ID
+
+The mmap offset encodes the bgid shifted by IORING_OFF_KMBUF_SHIFT.
+The io_buf_get_region() helper retrieves the appropriate region.
+
+This allows userspace to mmap the kernel-allocated buffer region and
+access the buffers directly.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
