@@ -1,13 +1,13 @@
 {
   "version": 5,
-  "prev": "cc960d1268d819654ab6205ca00200bf40138867",
-  "head": "ae67aa7d6c28cd2c158ea9adf55d2d81a85bada9",
+  "prev": "032328d929f64a2820ff5bf646c51d9e9a9e37db",
+  "head": "326cdef658043c8710908288f3bed37e109c544c",
   "applied": [
     "rfc-fuse-set-request-unique-on",
-    "fuse-io-uring-avoid-_send-code"
+    "fuse-io-uring-avoid-_send-code",
+    "fuse-io-uring-avoid-complete"
   ],
   "unapplied": [
-    "fuse-io-uring-avoid-complete",
     "fuse-fine-grained-request",
     "fuse-increase-the-default-max",
     "fuse-invalidate-inode-aliases",
