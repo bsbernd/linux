@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "6fd8173b61405b0facc4cb0c85b774e041f5ffb1",
-  "head": "d88e4e9bc12d9b27e5b52d5759d820f77bd99140",
+  "prev": "9362419e580e58f7082a91cbfd4044cf644aadf3",
+  "head": "9731ebe362377468a96a1d0aeec1a72961126187",
   "applied": [
     "rfc-fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
@@ -30,10 +30,10 @@
     "fuse-invalidate-the-page-cache",
     "fuse-always-flush-the-page",
     "fuse-fetch-a-queued-fuse",
-    "fuse-add-compound-command-to"
+    "fuse-add-compound-command-to",
+    "fuse-simplify-compound"
   ],
   "unapplied": [
-    "fuse-simplify-compound",
     "red-34640-fix-a-startup",
     "fuse-move-ring-queues_refs",
     "fs-fuse-fix-potential-memory",
