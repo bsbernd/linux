@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "b5e235f3dd8a53cb4579bca63bc20dc309c5ac47",
-  "head": "4c9869d9029cda29843da879b18f6c70b39b28fd",
+  "prev": "16bd7592f0929da1e37dc1d37a8eea4ada823820",
+  "head": "777f752f25bf4cfc7129f16e1fd4de378f1a0b6f",
   "applied": [
     "rfc-fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
@@ -35,10 +35,10 @@
     "red-34640-fix-a-startup",
     "fuse-move-ring-queues_refs",
     "fs-fuse-fix-potential-memory",
-    "fuse-fix-io-uring-list"
+    "fuse-fix-io-uring-list",
+    "fuse-fix-missing-numa_q_map"
   ],
   "unapplied": [
-    "fuse-fix-missing-numa_q_map",
     "fuse-allow-synchronous",
     "fuse-compounds-fix-includes",
     "create-workflow-the-create-pr",
