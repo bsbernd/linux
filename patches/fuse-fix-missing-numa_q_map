@@ -1,0 +1,10 @@
+Bottom: d62abedbb6af2d9eb5bf68f30a1e9692ffd6edc2
+Top:    c546920399c836352516259c891569e367246a12
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:03:49 +0100
+
+fuse: Fix missing numa_q_map free in dev_uring
+
+This fixes a memory leak.
+
+(imported from commit f75b62fce0e6689b1cc57bdae4b6a93be1ca2168)

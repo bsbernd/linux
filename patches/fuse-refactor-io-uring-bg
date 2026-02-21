@@ -1,0 +1,20 @@
+Bottom: ba640d2851500965073c65fc4275d99a9e61270e
+Top:    8df435c9d723b9eb0091afaafc5500da048730f0
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: Refactor io-uring bg queue flush and queue abort
+
+This is a preparation to allow fuse-io-uring bg queue
+flush from flush_bg_queue()
+
+This does two function renames:
+fuse_uring_flush_bg -> fuse_uring_flush_queue_bg
+fuse_uring_abort_end_requests -> fuse_uring_flush_bg
+
+And fuse_uring_abort_end_queue_requests() is moved to
+fuse_uring_stop_queues().
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit e70ef24251116bc7f591a9a856c371549cd5ae77)

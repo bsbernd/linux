@@ -1,0 +1,31 @@
+Bottom: 16fbaf7d78e05126c654502f35cbdd2f177da14f
+Top:    430e59a16e43f1273889333b0734598a4ddd8ea4
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:03:39 +0100
+
+fuse: Add retry attempts for numa local queues for load distribution
+
+This is to further improve performance.
+
+fio --directory=/tmp/dest --name=iops.\$jobnum --rw=randread \
+--bs=4k --size=1G --numjobs=1 --iodepth=4 --time_based\
+--runtime=30s --group_reporting --ioengine=io_uring\
+--direct=1
+
+unpatched
+   READ: bw=650MiB/s (682MB/s)
+patched:
+   READ: bw=995MiB/s (1043MB/s)
+
+with --iodepth=8
+
+unpatched
+   READ: bw=641MiB/s (672MB/s)
+patched
+   READ: bw=966MiB/s (1012MB/s)
+
+Reason is that with --iodepth=x (x > 1) fio submits multiple async
+requests and a single queue might become CPU limited. I.e. spreading
+the load helps.
+
+(imported from commit 2e73b0be1f55d61c2d861a12bf6bb9963b9b877a)

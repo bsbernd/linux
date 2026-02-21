@@ -1,0 +1,16 @@
+Bottom: 55f818746c5d13c8f27dfad5945547053070ceee
+Top:    c600920d5315059e0586769b749673d434dd20ab
+Author: Yong Ze Chen <yochen@ddn.com>
+Date:   2026-02-20 23:18:09 +0100
+
+fuse: invalidate inode aliases when doing inode invalidation
+
+Add support to invalidate inode aliases when doing inode invalidation.
+This is useful for distributed file systems, which use DLM for cache
+coherency. So, when a client losts its inode lock, it should invalidate
+its inode cache and dentry cache since the other client may delete
+this file after getting inode lock.
+
+Signed-off-by: Yong Ze Chen <yochen@ddn.com>
+
+(imported from commit 49720b5c84ada61feeb09da9ad4b9a0a40694792)

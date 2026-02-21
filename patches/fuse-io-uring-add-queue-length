@@ -1,0 +1,14 @@
+Bottom: e44bfbf123d0ab6f14404e8ff67f43d8edbbd9e3
+Top:    758ce5d2cd33a285a760da47552cc94556af84c8
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: {io-uring} Add queue length counters
+
+This is another preparation and will be used for decision
+which queue to add a request to.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+Reviewed-by: Joanne Koong <joannelkoong@gmail.com>
+
+(imported from commit e4698faf912435f7f3f28c169f7bb8342d7b1edf)

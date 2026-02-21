@@ -1,0 +1,23 @@
+Bottom: 033614ce0a5749a472830f1ae7181be384d6bfc3
+Top:    988af4cbcd617a301732e07e9f52331b10acb6bf
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: Use fuser-server provided read-ahead for CAP_SYS_ADMIN
+
+readhead is currently limited to bdi->ra_pages. One can change
+that after the mount with something like
+
+minor=$(stat -c "%d" /path/to/fuse)
+echo 1024 > /sys/class/bdi/0:$(minor)/read_ahead_kb
+
+Issue is that fuse-server cannot do that from its ->init method,
+as it has to know about device minor, which blocks before
+init is complete.
+
+Fuse already sets the bdi value, but upper limit is the current
+bdi value. For CAP_SYS_ADMIN we can allow higher values.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit 763c96da4bd6d1bb95d8e6bb7fd352389f3a17b9)

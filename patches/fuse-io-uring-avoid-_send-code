@@ -1,0 +1,13 @@
+Bottom: 97036143edb07e9ff441fe5269fb9e7e20d72c2e
+Top:    7dfb9a64feb5c55d4a2568788406c63d5bef9f1f
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-20 17:05:54 +0100
+
+fuse: {io-uring} Avoid _send code dup
+
+fuse_uring_send_next_to_ring() can just call into fuse_uring_send
+and avoid code dup.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit 9efaa8dfc77901a8b0cf24f65de5963ef23f170e)

@@ -1,0 +1,16 @@
+Bottom: 430e59a16e43f1273889333b0734598a4ddd8ea4
+Top:    11e2d60024b552d1bbe90a1400cbc756d1554864
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:03:49 +0100
+
+fuse: Invalidate the page cache after FOPEN_DIRECT_IO write
+
+generic_file_direct_write() also does this and has a large
+comment about.
+
+Reproducer here is xfstest's generic/209, which is exactly to
+have competing DIO write and cached IO read.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit 9e04c8aa32d008c44aab5348e4e039ed8e78ca47)

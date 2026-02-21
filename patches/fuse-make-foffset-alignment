@@ -1,0 +1,55 @@
+Bottom: 3b56d5f07b0db9b151aaebd6afcdee72f0d2e098
+Top:    4c26293cc6e8a0ce0fb5fe736af62ff3c3b5aae5
+Author: Jingbo Xu <jefflexu@linux.alibaba.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: make foffset alignment opt-in for optimum backend performance
+
+Sometimes the file offset alignment needs to be opt-in to achieve the
+optimum performance at the backend store.
+
+For example when ErasureCode [1] is used at the backend store, the
+optimum write performance is achieved when the WRITE request is aligned
+with the stripe size of ErasureCode.  Otherwise a non-aligned WRITE
+request needs to be split at the stripe size boundary.  It is quite
+costly to handle these split partial requests, as firstly the whole
+stripe to which the split partial request belongs needs to be read out,
+then overwrite the read stripe buffer with the request, and finally write
+the whole stripe back to the persistent storage.
+
+Thus the backend store can suffer severe performance degradation when
+WRITE requests can not fit into one stripe exactly.  The write performance
+can be 10x slower when the request is 256KB in size given 4MB stripe size.
+Also there can be 50% performance degradation in theory if the request
+is not stripe boundary aligned.
+
+Besides, the conveyed test indicates that, the non-alignment issue
+becomes more severe when decreasing fuse's max_ratio, maybe partly
+because the background writeback now is more likely to run parallelly
+with the dirtier.
+
+fuse's max_ratio	ratio of aligned WRITE requests
+----------------	-------------------------------
+70			99.9%
+40			74%
+20			45%
+10			20%
+
+With the patched version, which makes the alignment constraint opt-in
+when constructing WRITE requests, the ratio of aligned WRITE requests
+increases to 98% (previously 20%) when fuse's max_ratio is 10.
+
+fuse: fix alignment to work with redfs ubuntu
+
+- small fix to make the fuse alignment patch work with redfs ubuntu 6.8.x
+- add writeback_control to fuse_writepage_need_send() to make
+more accurate decisions about when to skip sending data
+- fix shift number for FUSE_ALIGN_PG_ORDER
+- remove test code
+
+[1] https://lore.kernel.org/linux-fsdevel/20240124070512.52207-1-jefflexu@linux.alibaba.com/T/#m9bce469998ea6e4f911555c6f7be1e077ce3d8b4
+Signed-off-by: Jingbo Xu <jefflexu@linux.alibaba.com>
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+Signed-off-by: Horst Birthelmer <hbirthelmer@ddn.com>
+
+(imported from commit 5e590a657460229e5cc8b05c5477a47955c96885)

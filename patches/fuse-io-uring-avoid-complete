@@ -1,0 +1,13 @@
+Bottom: 7dfb9a64feb5c55d4a2568788406c63d5bef9f1f
+Top:    cd4525cb207ce417f02cc2d39eb8957f754e4856
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-20 22:32:06 +0100
+
+fuse: {io-uring] Avoid complete-in-task if pinned pages are used
+
+If pinned pages are used the application can write into these
+pages and io_uring_cmd_complete_in_task() is not needed.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit 5f0264c1dc0100e274f3db37511bba0d8043de1c)

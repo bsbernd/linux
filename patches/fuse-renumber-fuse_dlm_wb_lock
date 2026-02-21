@@ -1,0 +1,10 @@
+Bottom: 51b71101f362f766f02b2164da9fd6482360fe68
+Top:    db520020aa4e33fd497960ad9d36d99c1ee4c681
+Author: Cheng Ding <cding@ddn.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: Renumber FUSE_DLM_WB_LOCK to 100
+
+Renumber the operation code to a high value to avoid conflicts with upstream.
+
+(imported from commit 27a0e9ea714f7fcf3ee40f977be6a17c10766509)

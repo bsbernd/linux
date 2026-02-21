@@ -1,0 +1,26 @@
+Bottom: f4b9f04e4c5eaa3729a7ea16ed51fdcee18f84a0
+Top:    51b71101f362f766f02b2164da9fd6482360fe68
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: add DLM_LOCK opcode
+
+When having writeback cache enabled it is beneficial for data consistency
+to communicate to the FUSE server when the kernel prepares a page for caching.
+This lets the FUSE server react and lock the page.
+
+Additionally the kernel lets the FUSE server decide how much data it locks by the
+same call and keeps the given information in the dlm lock management.
+
+If the feature is not supported it will be disabled after first unsuccessful use.
+
+- Add DLM_LOCK fuse opcode
+- Add cache page lock caching for writeback cache functionality.
+This means sending out a FUSE call whenever the kernel prepares a page
+for writeback cache. The kernel will manage the cache so that it will keep
+track of already acquired locks.
+(except for the case that is documented in the code)
+- Use rb-trees for the management of the already 'locked' page ranges
+- Use rw_semaphore for synchronization in fuse_dlm_cache
+
+(imported from commit 287c8840b60d5cdcf806b16e8cc5722f2dbf0738)

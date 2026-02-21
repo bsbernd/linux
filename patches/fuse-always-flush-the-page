@@ -1,0 +1,14 @@
+Bottom: 11e2d60024b552d1bbe90a1400cbc756d1554864
+Top:    a4638b1818c37e17d599e4b016bad22b41ee0be6
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:03:49 +0100
+
+fuse: Always flush the page cache before FOPEN_DIRECT_IO write
+
+This was done as condition on direct_io_allow_mmap, but I believe
+this is not right, as a file might be open two times - once with
+write-back enabled another time with FOPEN_DIRECT_IO.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit dfca33861c21aa0bdab22366154d8488fa82d96f)

@@ -1,0 +1,15 @@
+Bottom: db520020aa4e33fd497960ad9d36d99c1ee4c681
+Top:    1eb44adfac17c2b6dfaf2cbb97cbc443c44a0438
+Author: Cheng Ding <cding@ddn.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: Send DLM_WB_LOCK request in page_mkwrite handler
+
+Send a DLM_WB_LOCK request in the page_mkwrite handler to enable FUSE
+filesystems to acquire a distributed lock manager (DLM) lock for
+protecting upcoming dirty pages when a previously read-only mapped
+page is about to be written.
+
+Signed-off-by: Cheng Ding <cding@ddn.com>
+
+(imported from commit ec36c455214837e9ce0d3f3385a0bb50dcfb51db)

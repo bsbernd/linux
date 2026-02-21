@@ -1,0 +1,13 @@
+Bottom: 758ce5d2cd33a285a760da47552cc94556af84c8
+Top:    9eab171b5c6641ba5df391694b23b9de30c1a8e8
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: {io-uring} Rename ring->nr_queues to max_nr_queues
+
+This is preparation for follow up commits that allow to run with a
+reduced number of queues.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit 2e27c33ffcf65b434ada1364a4d2ea92b094f0c3)

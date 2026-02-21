@@ -1,0 +1,21 @@
+Bottom: 1eb44adfac17c2b6dfaf2cbb97cbc443c44a0438
+Top:    033614ce0a5749a472830f1ae7181be384d6bfc3
+Author: Horst Birthelmer <hbirthelmer@ddn.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: change FUSE DLM_LOCK to request start and end of area
+
+- Increase the possible lock size to 64 bit.
+- change semantics of DLM locks to request start and end
+- change semantics of DLM request return to mark start
+and end of the locked area
+- better prepare dlm lock range cache rb-tree
+for unaligned byte range locks which could return
+any value as long as it is larger than the range
+requested
+- add the case where start and end are zero
+to destroy the cache
+
+Signed-off-by: Horst Birthelmer <hbirthelmer@ddn.com>
+
+(imported from commit 87968c738b67b07084b19b5e727074c0604d7ba6)

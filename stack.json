@@ -1,9 +1,175 @@
 {
   "version": 5,
-  "prev": null,
+  "prev": "6c703b2f161e6f7a2ab11a31901e2a3c3246c3b1",
   "head": "8d8f77b04ff3705cd37578718c1506596081a747",
-  "applied": [],
+  "applied": [
+    "rfc-fuse-set-request-unique-on",
+    "fuse-io-uring-avoid-_send-code",
+    "fuse-io-uring-avoid-complete",
+    "fuse-fine-grained-request",
+    "fuse-increase-the-default-max",
+    "fuse-invalidate-inode-aliases",
+    "fuse-uring-pin-the-user-buffer",
+    "fuse-add-dlm_lock-opcode",
+    "fuse-renumber-fuse_dlm_wb_lock",
+    "fuse-send-dlm_wb_lock-request",
+    "fuse-change-fuse-dlm_lock-to",
+    "fuse-use-fuser-server-provided",
+    "fuse-allow-read_folio-to-retry",
+    "fuse-flush-pending-fuse-events",
+    "fuse-refactor-io-uring-bg",
+    "fuse-flush-the-io-uring-bg",
+    "fuse-make-foffset-alignment",
+    "fuse-fix-memory-leak-in-fuse",
+    "fuse-io-uring-add-queue-length",
+    "fuse-io-uring-rename-ring",
+    "fuse-io-uring-use-bitmaps-to",
+    "fuse-io-uring-allow-reduced",
+    "fuse-io-uring-queue-background",
+    "fuse-add-retry-attempts-for",
+    "fuse-invalidate-the-page-cache",
+    "fuse-always-flush-the-page",
+    "fuse-fetch-a-queued-fuse",
+    "fuse-add-compound-command-to",
+    "fuse-simplify-compound",
+    "red-34640-fix-a-startup",
+    "fuse-move-ring-queues_refs",
+    "fs-fuse-fix-potential-memory",
+    "fuse-fix-io-uring-list",
+    "fuse-fix-missing-numa_q_map",
+    "fuse-allow-synchronous",
+    "fuse-compounds-fix-includes",
+    "create-workflow-the-create-pr",
+    "fix-the-github-actions-pr",
+    "remove-the-pull_request_target",
+    "fuse-make-compounds-a-module",
+    "fuse-fix-the-reduced-queue"
+  ],
   "unapplied": [],
   "hidden": [],
-  "patches": {}
+  "patches": {
+    "create-workflow-the-create-pr": {
+      "oid": "cc982deab3f92cb5355de34105a97b8c86a5667a"
+    },
+    "fix-the-github-actions-pr": {
+      "oid": "ecba5df3ea911df8787960ba3e80ed65e80560f1"
+    },
+    "fs-fuse-fix-potential-memory": {
+      "oid": "f932a504cca820f4f6da6f7f5b5fe9238cd91b54"
+    },
+    "fuse-add-compound-command-to": {
+      "oid": "d88e4e9bc12d9b27e5b52d5759d820f77bd99140"
+    },
+    "fuse-add-dlm_lock-opcode": {
+      "oid": "8ec0fbede706a809f02d5917d0f7f5b7b80ef9d1"
+    },
+    "fuse-add-retry-attempts-for": {
+      "oid": "b69d49099e4669169a59a12369fb87afb3a90897"
+    },
+    "fuse-allow-read_folio-to-retry": {
+      "oid": "b18b506183080ed880bc4f62044f1192d7d4d54b"
+    },
+    "fuse-allow-synchronous": {
+      "oid": "dd372126b42d0618ef680cd23918cb15a52d21aa"
+    },
+    "fuse-always-flush-the-page": {
+      "oid": "ac2d953dc7d997b0d967b3bc1522655b70838e87"
+    },
+    "fuse-change-fuse-dlm_lock-to": {
+      "oid": "fdbf84c881f0964828245078fa84200cfade343f"
+    },
+    "fuse-compounds-fix-includes": {
+      "oid": "43ab9071fa32a9b60552795b7858600ffb74b77f"
+    },
+    "fuse-fetch-a-queued-fuse": {
+      "oid": "239b013e150a8f3e11f71aacd4144275470695fd"
+    },
+    "fuse-fine-grained-request": {
+      "oid": "20d7be015a5a094da2eb75f81abc94a167f0fea3"
+    },
+    "fuse-fix-io-uring-list": {
+      "oid": "4c9869d9029cda29843da879b18f6c70b39b28fd"
+    },
+    "fuse-fix-memory-leak-in-fuse": {
+      "oid": "27fbb81f1fe7ec03434bef4fe37d7d40d87425be"
+    },
+    "fuse-fix-missing-numa_q_map": {
+      "oid": "777f752f25bf4cfc7129f16e1fd4de378f1a0b6f"
+    },
+    "fuse-fix-the-reduced-queue": {
+      "oid": "8d8f77b04ff3705cd37578718c1506596081a747"
+    },
+    "fuse-flush-pending-fuse-events": {
+      "oid": "d1f4a0dac1f3a7cbd4d07f557ef4cfbb13c8de20"
+    },
+    "fuse-flush-the-io-uring-bg": {
+      "oid": "1b94f25cc985b0561b911db5c555d2860fa3d760"
+    },
+    "fuse-increase-the-default-max": {
+      "oid": "3c1e71e3da972a13e85b4cb4cc16bf75cf206e21"
+    },
+    "fuse-invalidate-inode-aliases": {
+      "oid": "b40ae0657c423130c6e660fe8d7f2cf7c7201fc2"
+    },
+    "fuse-invalidate-the-page-cache": {
+      "oid": "c6134de491eb92342596d252e1e17c1192b1a6d3"
+    },
+    "fuse-io-uring-add-queue-length": {
+      "oid": "0a19da5d3b8b90c8e3babe3d6f12db637959de72"
+    },
+    "fuse-io-uring-allow-reduced": {
+      "oid": "9485024e89f15dae0a96100c96dc9291614e6537"
+    },
+    "fuse-io-uring-avoid-_send-code": {
+      "oid": "ae67aa7d6c28cd2c158ea9adf55d2d81a85bada9"
+    },
+    "fuse-io-uring-avoid-complete": {
+      "oid": "326cdef658043c8710908288f3bed37e109c544c"
+    },
+    "fuse-io-uring-queue-background": {
+      "oid": "3fe7ec21979a60209125ec7784c284be6a60e8bd"
+    },
+    "fuse-io-uring-rename-ring": {
+      "oid": "1d8754795f5c5e063e73284cc9d4fdb9e4ea1343"
+    },
+    "fuse-io-uring-use-bitmaps-to": {
+      "oid": "6e686493afa31297c79ef76a80b970307316881d"
+    },
+    "fuse-make-compounds-a-module": {
+      "oid": "c0729bba6c6d0c1691407999173495865d535888"
+    },
+    "fuse-make-foffset-alignment": {
+      "oid": "31b41c3bf2f9075fe34763452ce2e430b6cf6740"
+    },
+    "fuse-move-ring-queues_refs": {
+      "oid": "e1df8822768b69ae301ff7c2b5f783cbe48a1670"
+    },
+    "fuse-refactor-io-uring-bg": {
+      "oid": "3f4e88c1ce42f260e2737058f5f8154641fd9c22"
+    },
+    "fuse-renumber-fuse_dlm_wb_lock": {
+      "oid": "fafe1ea90a79ef776af5029c0d96dab96a4926ba"
+    },
+    "fuse-send-dlm_wb_lock-request": {
+      "oid": "ca839e7289e4e194fc85d495c940df128ca09bf3"
+    },
+    "fuse-simplify-compound": {
+      "oid": "9731ebe362377468a96a1d0aeec1a72961126187"
+    },
+    "fuse-uring-pin-the-user-buffer": {
+      "oid": "ab6d3143f05545ac4c49b8a11afce73a009eb363"
+    },
+    "fuse-use-fuser-server-provided": {
+      "oid": "b45f1e655e41056897356b597b50427a39329fad"
+    },
+    "red-34640-fix-a-startup": {
+      "oid": "f15b501eb9c88c082783b01afb8dc81e0a0dded9"
+    },
+    "remove-the-pull_request_target": {
+      "oid": "40321d96f67e7b8606cf680c7f846462021e618a"
+    },
+    "rfc-fuse-set-request-unique-on": {
+      "oid": "0b91d06aeade41f83d44e5642b51ae39377a97ba"
+    }
+  }
 }

@@ -1,0 +1,18 @@
+Bottom: 971d7809dcb2c82bd03eae772da76190ff1c7496
+Top:    97036143edb07e9ff441fe5269fb9e7e20d72c2e
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-20 17:04:58 +0100
+
+[RFC] fuse: Set request unique on allocation
+
+This is especially needed for better ftrace analysis,
+for example to build histograms. So far the request unique
+was missing, because it was added after the first trace message.
+
+IDs/req-unique now might not come up perfectly sequentially
+anymore, but especially  with cloned device or io-uring this
+did not work perfectly anyway.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit 44158921dd11a6654a1935dfb2ad8af953f7ada1)

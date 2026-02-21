@@ -1,0 +1,19 @@
+Bottom: cb39f1c44ff98b5869e67b70312fa5cafb8e055d
+Top:    49178e84a9c21a0183feac722eca94ce093c05e4
+Author: Horst Birthelmer <hbirthelmer@ddn.com>
+Date:   2026-02-21 00:03:49 +0100
+
+fuse: simplify compound commands
+
+Simplify fuse_compound_req to hold only the pointers
+to the added fuse args and the request housekeeping.
+
+Simplify open+getattr call by using helper functions
+to fill out the fuse request parameters
+
+Signed-off-by: Horst Birthelmer <hbirthelmer@ddn.com>
+
+(imported from commit 1607a03696693c4ceef7a61adf5759748a7ca9b0)
+(imported from commit 9df5e4cb96184aae03d7d49131b59a4767641d6b)
+(imported from commit 9921bcdc4e126a7606e036b04893a6bfd36b8c75)
+(imported from commit 09d6f59e98090b4de35bfe5344fd1ca5559d1c16)

@@ -1,0 +1,12 @@
+Bottom: 4c26293cc6e8a0ce0fb5fe736af62ff3c3b5aae5
+Top:    e44bfbf123d0ab6f14404e8ff67f43d8edbbd9e3
+Author: Cheng Ding <cding@ddn.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: fix memory leak in fuse-over-io-uring argument copies
+
+Fix reference count leak of payload pages during fuse argument copies.
+
+Signed-off-by: Cheng Ding <cding@ddn.com>
+
+(imported from commit 8b75cf05a2efc20e8f46ba9e10664c502249ee21)

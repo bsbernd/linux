@@ -1,0 +1,21 @@
+Bottom: 0a6547e9a6c3866b04c3254052e0e513d3736bd9
+Top:    d62abedbb6af2d9eb5bf68f30a1e9692ffd6edc2
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-02-21 00:03:49 +0100
+
+fuse: fix io-uring list corruption for terminated non-committed requests
+
+When a request is terminated before it has been committed, the request
+is not removed from the queue's list. This leaves a dangling list entry
+that leads to list corruption and use-after-free issues.
+
+Remove the request from the queue's list for terminated non-committed
+requests.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Fixes: c090c8abae4b ("fuse: Add io-uring sqe commit and fetch support")
+Cc: stable@vger.kernel.org
+Reviewed-by: Bernd Schubert <bschubert@ddn.com>
+Signed-off-by: Miklos Szeredi <mszeredi@redhat.com>
+
+(imported from commit 07214a0156daca7df97f0c25528259f76b5e2b10)

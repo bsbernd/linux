@@ -1,0 +1,15 @@
+Bottom: c600920d5315059e0586769b749673d434dd20ab
+Top:    f4b9f04e4c5eaa3729a7ea16ed51fdcee18f84a0
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:02:06 +0100
+
+fuse: {uring} Pin the user buffer
+
+This is to allow copying into the buffer from the application
+without the need to copy in ring context (and with that,
+the need that the ring task is active in kernel space).
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+(cherry picked from commit 43d1a63dec17d928609fb9725ac4ab9d6e09803f)
+
+(imported from commit ea01f94a55f91fa48cb3a0304b1e41a92707539a)

@@ -1,0 +1,18 @@
+Bottom: eee122b9e123f7096ae8ff521df8516eb54bde8d
+Top:    bf9abfdcea990d480d9b476cb6e1f0e7f6e5d052
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: {io-uring} Allow reduced number of ring queues
+
+Queues selection (fuse_uring_get_queue) can handle reduced number
+queues - using io-uring is possible now even with a single
+queue and entry.
+
+The FUSE_URING_REDUCED_Q flag is being introduce tell fuse server that
+reduced queues are possible, i.e. if the flag is set, fuse server
+is free to reduce number queues.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit f620f3d35969bd9a04304b757a18a11a0787dedc)

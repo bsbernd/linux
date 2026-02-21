@@ -1,0 +1,50 @@
+Bottom: 49178e84a9c21a0183feac722eca94ce093c05e4
+Top:    7d9d5e87b8400c26a76346c83e7cd6660c10f2cb
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:03:49 +0100
+
+RED-34640: Fix a startup teardown race
+
+There was a race between fuse_uring_cancel() and
+fuse_uring_register()/fuse_uring_next_fuse_req(),
+which comes from the queue reduction feature.
+
+Race was
+
+core-A                         core-B
+fuse_uring_register
+    spin_lock(&queue->lock);
+    fuse_uring_ent_avail()
+    spin_unlock(&queue->lock);
+
+                                fuse_uring_cancel()
+                                    spin_lock(&queue->lock);
+                                    ent->state = FRRS_USERSPACE;
+                                    list_move()
+
+    fuse_uring_next_fuse_req()
+        spin_lock(&queue->lock);
+        fuse_uring_ent_avail(ent, queue);
+        fuse_uring_send_next_to_ring()
+        spin_unlock(&queue->lock);
+        fuse_uring_send_next_to_ring
+
+I.e. fuse_uring_ent_avail() was called two times and the 2nd time
+when the entry was actually already handled by fuse_uring_cancel().
+
+Solution is to not call fuse_uring_ent_avail() from
+fuse_uring_register. With that the entry is not in state
+FRRS_AVAILABLE and fuse_uring_cancel() will not touch it.
+fuse_uring_send_next_to_ring() will mark it as FRRS_AVAILABLE,
+and then either assign a request to it and change state again
+or will not touch it at all anymore - race fixed.
+
+This will be folded into the upstream queue reduction patches
+and therefore has the RED-34640 commit message.
+
+Also entirely removed is fuse_uring_do_register() as remaining
+work can be done by the caller.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit 932febaee72bfc10a391cdfa14a2b7f37549d967)

@@ -1,0 +1,33 @@
+Bottom: e488600a6230b6983f5167f492abf3f3fc6131c5
+Top:    0a6547e9a6c3866b04c3254052e0e513d3736bd9
+Author: Jian Huang Li <ali@ddn.com>
+Date:   2026-02-21 00:03:49 +0100
+
+fs/fuse: fix potential memory leak from fuse_uring_cancel
+
+This issue could be observed sometimes during libfuse xfstests, from
+dmseg prints some like "kernel: WARNING: CPU: 4 PID: 0 at
+fs/fuse/dev_uring.c:204 fuse_uring_destruct+0x1f5/0x200 [fuse]".
+
+The cause is, if when fuse daemon just submitted
+FUSE_IO_URING_CMD_REGISTER SQEs, then umount or fuse daemon quits at
+this very early stage. After all uring queues stopped, might have one or
+more unprocessed FUSE_IO_URING_CMD_REGISTER SQEs get processed then some
+new ring entities are created and added to ent_avail_queue, and
+immediately fuse_uring_cancel moved them to ent_in_userspace after SQEs
+get canceled. These ring entities were not moved to ent_released, and
+stayed in ent_in_userspace when fuse_uring_destruct was called.
+
+One way to solve it would be to also free 'ent_in_userspace' in
+fuse_uring_destruct(), but from code point of view it is hard to see why
+it is needed. As suggested by Joanne, another solution is to avoid moving
+entries in fuse_uring_cancel() to the 'ent_in_userspace' list and just
+releasing them directly.
+
+Fixes: b6236c8407cb ("fuse: {io-uring} Prevent mount point hang on fuse-server termination")
+Cc: Joanne Koong <joannelkoong@gmail.com>
+Cc: <stable@vger.kernel.org> # v6.14
+Signed-off-by: Jian Huang Li <ali@ddn.com>
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit 30d0473dcc0eecac6b1e00d9d87b0892146086a9)

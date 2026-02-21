@@ -1,0 +1,12 @@
+Bottom: c9a177a1cfc7cd2fdd9128b3f103090e78eb16bf
+Top:    55f818746c5d13c8f27dfad5945547053070ceee
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-20 23:17:25 +0100
+
+fuse: Increase the default max pages limit to 4097
+
+Due to user buffer misalignent we actually need one page more,
+i.e. 1025 instead of 1024, will be handled differently.
+For now we just bump up the max.
+
+(imported from commit 3f71501c9c4702ba976145ff15c4a053ecd1a3ee)

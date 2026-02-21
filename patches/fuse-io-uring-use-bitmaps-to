@@ -1,0 +1,13 @@
+Bottom: 9eab171b5c6641ba5df391694b23b9de30c1a8e8
+Top:    eee122b9e123f7096ae8ff521df8516eb54bde8d
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: {io-uring} Use bitmaps to track registered queues
+
+Add per-CPU and per-NUMA node bitmasks to track which
+io-uring queues are registered.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit be6edce441ecc37ee34a8937f07c01ab99bfb7f7)

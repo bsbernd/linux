@@ -1,0 +1,89 @@
+Bottom: bf9abfdcea990d480d9b476cb6e1f0e7f6e5d052
+Top:    16fbaf7d78e05126c654502f35cbdd2f177da14f
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: {io-uring} Queue background requests on a different core
+
+Running background IO on a different core makes quite a difference.
+
+fio --directory=/tmp/dest --name=iops.\$jobnum --rw=randread \
+--bs=4k --size=1G --numjobs=1 --iodepth=4 --time_based\
+--runtime=30s --group_reporting --ioengine=io_uring\
+ --direct=1
+
+unpatched
+   READ: bw=272MiB/s (285MB/s) ...
+patched
+   READ: bw=650MiB/s (682MB/s)
+
+Reason is easily visible, the fio process is migrating between CPUs
+when requests are submitted on the queue for the same core.
+
+With --iodepth=8
+
+unpatched
+   READ: bw=466MiB/s (489MB/s)
+patched
+   READ: bw=641MiB/s (672MB/s)
+
+Without io-uring (--iodepth=8)
+   READ: bw=729MiB/s (764MB/s)
+
+Without fuse (--iodepth=8)
+   READ: bw=2199MiB/s (2306MB/s)
+
+(Test were done with
+<libfuse>/example/passthrough_hp -o allow_other --nopassthrough  \
+[-o io_uring] /tmp/source /tmp/dest
+)
+
+Additional notes:
+
+With FURING_NEXT_QUEUE_RETRIES=0 (--iodepth=8)
+   READ: bw=903MiB/s (946MB/s)
+
+With just a random qid (--iodepth=8)
+   READ: bw=429MiB/s (450MB/s)
+
+With --iodepth=1
+unpatched
+   READ: bw=195MiB/s (204MB/s)
+patched
+   READ: bw=232MiB/s (243MB/s)
+
+With --iodepth=1 --numjobs=2
+unpatched
+   READ: bw=366MiB/s (384MB/s)
+patched
+   READ: bw=472MiB/s (495MB/s)
+
+With --iodepth=1 --numjobs=8
+unpatched
+   READ: bw=1437MiB/s (1507MB/s)
+patched
+   READ: bw=1529MiB/s (1603MB/s)
+fuse without io-uring
+   READ: bw=1314MiB/s (1378MB/s), 1314MiB/s-1314MiB/s ...
+no-fuse
+   READ: bw=2566MiB/s (2690MB/s), 2566MiB/s-2566MiB/s ...
+
+In summary, for async requests the core doing application IO is busy
+sending requests and processing IOs should be done on a different core.
+Spreading the load on random cores is also not desirable, as the core
+might be frequency scaled down and/or in C1 sleep states. Not shown here,
+but differnces are much smaller when the system uses performance govenor
+instead of schedutil (ubuntu default). Obviously at the cost of higher
+system power consumption for performance govenor - not desirable either.
+
+Results without io-uring (which uses fixed libfuse threads per queue)
+heavily depend on the current number of active threads. Libfuse uses
+default of max 10 threads, but actual nr max threads is a parameter.
+Also, no-fuse-io-uring results heavily depend on, if there was already
+running another workload before, as libfuse starts these threads
+dynamically - i.e. the more threads are active, the worse the
+performance.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit c6399ea79b104ac79758f2c36f1977b80a02358d)

@@ -1,0 +1,17 @@
+Bottom: 745f06e28038a13d40e58669778285ac327e02ba
+Top:    cb39f1c44ff98b5869e67b70312fa5cafb8e055d
+Author: Horst Birthelmer <hbirthelmer@ddn.com>
+Date:   2026-02-21 00:03:49 +0100
+
+fuse: add compound command to combine multiple requests
+
+fuse.h: add new opcode FUSE_COMPOUND
+
+fuse_compound.c: add new functionality to pack multiple
+fuse operations into one compound command
+
+file.c: add an implementation of open+getattr
+
+Signed-off-by: Horst Birthelmer <hbirthelmer@ddn.com>
+
+(imported from commit d9e735140a3faccbe5786a7e75a4ad9a6a9aa2e0)

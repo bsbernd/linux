@@ -1,0 +1,11 @@
+Bottom: 1c2137a15931f663f077f90ea63d1bdf6acda853
+Top:    afed63141685f270b01599b21a7ea1f0eae67101
+Author: Feng Shuo <steve.shuo.feng@gmail.com>
+Date:   2026-02-21 00:03:49 +0100
+
+Fix the github actions PR trigger
+
+Switch to pull_request_target instead of pull_request as the github
+security requirement. Also limits the scope to protected PR.
+
+(imported from commit b9980ad9af3598d465c72fb92f565415c8d4a006)

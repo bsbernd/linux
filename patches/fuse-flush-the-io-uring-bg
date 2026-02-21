@@ -1,0 +1,14 @@
+Bottom: 8df435c9d723b9eb0091afaafc5500da048730f0
+Top:    3b56d5f07b0db9b151aaebd6afcdee72f0d2e098
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: Flush the io-uring bg queue from fuse_uring_flush_bg
+
+This is useful to have a unique API to flush background requests.
+For example when the bg queue gets flushed before
+the remaining of fuse_conn_destroy().
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit fc4120cc58e7fbcb541bf2e9a72781b569561912)

@@ -1,0 +1,12 @@
+Bottom: 8f2ed1bba7905a3de5ff7c78ec12cfeba8ed5d25
+Top:    d7696a679ce5e5f6459ef96850be14db8ab585a8
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:03:49 +0100
+
+fuse: Make compounds a module option
+
+For now compounds are a module option and disabled by default
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit f3b301ddccefec9e6363bb14e307c51462c0cc6a)

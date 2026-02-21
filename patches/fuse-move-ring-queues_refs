@@ -1,0 +1,12 @@
+Bottom: 7d9d5e87b8400c26a76346c83e7cd6660c10f2cb
+Top:    e488600a6230b6983f5167f492abf3f3fc6131c5
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:03:49 +0100
+
+fuse: Move ring queues_refs decrement
+
+This is just to avoid code dup with an upcoming commit.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit ec3217f655d816ac9e3e29b1dc1506d7b195a0a5)

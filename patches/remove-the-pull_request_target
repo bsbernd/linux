@@ -1,0 +1,10 @@
+Bottom: afed63141685f270b01599b21a7ea1f0eae67101
+Top:    8f2ed1bba7905a3de5ff7c78ec12cfeba8ed5d25
+Author: Shuo Feng <steve.shuo.feng@gmail.com>
+Date:   2026-02-21 00:03:49 +0100
+
+Remove the pull_request_target from actions
+
+Remove the pull_request_target as it doesn't work.
+
+(imported from commit 5328f660acf48ef3cf1f00ab8ae486aedf6874ee)

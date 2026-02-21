@@ -1,0 +1,11 @@
+Bottom: a2facb8f9642dc2eb44968ca2860dd2ed8f12755
+Top:    1c2137a15931f663f077f90ea63d1bdf6acda853
+Author: Feng Shuo <steve.shuo.feng@gmail.com>
+Date:   2026-02-21 00:03:49 +0100
+
+Create workflow the create pr for redfs in each branch
+
+Take actions on the PR merged event of this repo. Run
+copy-from-linux-branch.sh and create a PR for redfs.
+
+(cherry picked from commit f54872e99c6ebccc92c202e15c22eb68c26b10f6)

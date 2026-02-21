@@ -1,0 +1,12 @@
+Bottom: eba551159a5bfd42eeb66f61ee4ff947b2ee1418
+Top:    a2facb8f9642dc2eb44968ca2860dd2ed8f12755
+Author: Horst Birthelmer <hbirthelmer@ddn.com>
+Date:   2026-02-21 00:03:49 +0100
+
+fuse: compounds fix includes
+
+no functional changes
+
+Signed-off-by: Horst Birthelmer <hbirthelmer@ddn.com>
+
+(imported from commit f0bccb2ea093d8bf703d535d34541b3000ec1d86)

@@ -1,0 +1,20 @@
+Bottom: 988af4cbcd617a301732e07e9f52331b10acb6bf
+Top:    da77e238002ac8bf13896ec9a6b3ebda572a99dd
+Author: Cheng Ding <cding@ddn.com>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: Allow read_folio to retry page fault and read operations
+
+Allow read_folio to return EAGAIN error and translate it to
+AOP_TRUNCATE_PAGE to retry page fault and read operations.
+This is used to prevent deadlock of folio lock/DLM lock order reversal:
+ - Fault or read operations acquire folio lock first, then DLM lock.
+ - FUSE daemon blocks new DLM lock acquisition while it invalidating
+   page cache. invalidate_inode_pages2_range() acquires folio lock
+To prevent deadlock, the FUSE daemon will fail its DLM lock acquisition
+with EAGAIN if it detects an in-flight page cache invalidating
+operation.
+
+Signed-off-by: Cheng Ding <cding@ddn.com>
+
+(imported from commit 8ecf1182053891c6458b10be1272d2d562492fbd)

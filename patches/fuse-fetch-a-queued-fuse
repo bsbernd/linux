@@ -1,0 +1,20 @@
+Bottom: a4638b1818c37e17d599e4b016bad22b41ee0be6
+Top:    745f06e28038a13d40e58669778285ac327e02ba
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:03:49 +0100
+
+fuse: Fetch a queued fuse request on command registration
+
+With the reduced queue feature io-uring is marked as ready after
+receiving the 1st ring entry. At this time other queues just
+might be in the process of registration and then a race happens
+
+fuse_uring_queue_fuse_req -> no queue entry registered yet
+    list_add_tail -> fuse request gets queued
+
+So far fetching requests from the list only happened from
+FUSE_IO_URING_CMD_COMMIT_AND_FETCH, but without new requests
+on the same queue, it would actually never send requests
+from that queue - the request was stuck.
+
+(imported from commit 3bfb6cdc9b978a13eab59ebae592ddfa225c4c4a)

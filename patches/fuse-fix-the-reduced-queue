@@ -1,0 +1,21 @@
+Bottom: d7696a679ce5e5f6459ef96850be14db8ab585a8
+Top:    cae7b1457d1f2def901b5f478dfd49e4ac408247
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-21 00:03:49 +0100
+
+fuse: Fix the reduced queue assignment
+
+The use of bitmap_weight() didn't give the actual index,
+but always returned the current cpu, which resulted
+in a totally wrong mapping.
+
+It now just increases a counter for every mapping and ignores
+cores not in the given (numa) map and then find the index
+for that.
+
+Also added is a pr_debug(), which can be activated for example
+with
+echo "module redfs +p" >/proc/dynamic_debug/control
+(Pity that upstream is not open for such debug messages).
+
+(imported from commit bcbb684ad26c86cc77c04fdab1584ff1ed6bc270)

@@ -1,0 +1,18 @@
+Bottom: cd4525cb207ce417f02cc2d39eb8957f754e4856
+Top:    c9a177a1cfc7cd2fdd9128b3f103090e78eb16bf
+Author: Bernd Schubert <bschubert@ddn.com>
+Date:   2026-02-20 22:42:42 +0100
+
+fuse: fine-grained request ftraces
+
+Rename trace_fuse_request_send to trace_fuse_request_enqueue
+Add trace_fuse_request_send
+Add trace_fuse_request_bg_enqueue
+Add trace_fuse_request_enqueue
+
+This helps to track entire request time and time in different
+queues.
+
+Signed-off-by: Bernd Schubert <bschubert@ddn.com>
+
+(imported from commit 4a7f14274fc223e50b36f428e1b6acd661b73f53)

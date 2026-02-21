@@ -1,0 +1,33 @@
+Bottom: da77e238002ac8bf13896ec9a6b3ebda572a99dd
+Top:    ba640d2851500965073c65fc4275d99a9e61270e
+Author: Darrick J. Wong <djwong@kernel.org>
+Date:   2026-02-21 00:02:47 +0100
+
+fuse: flush pending fuse events before aborting the connection
+
+generic/488 fails with fuse2fs in the following fashion:
+
+generic/488       _check_generic_filesystem: filesystem on /dev/sdf is inconsistent
+(see /var/tmp/fstests/generic/488.full for details)
+
+This test opens a large number of files, unlinks them (which really just
+renames them to fuse hidden files), closes the program, unmounts the
+filesystem, and runs fsck to check that there aren't any inconsistencies
+in the filesystem.
+
+Unfortunately, the 488.full file shows that there are a lot of hidden
+files left over in the filesystem, with incorrect link counts.  Tracing
+fuse_request_* shows that there are a large number of FUSE_RELEASE
+commands that are queued up on behalf of the unlinked files at the time
+that fuse_conn_destroy calls fuse_abort_conn.  Had the connection not
+aborted, the fuse server would have responded to the RELEASE commands by
+removing the hidden files; instead they stick around.
+
+Create a function to push all the background requests to the queue and
+then wait for the number of pending events to hit zero, and call this
+before fuse_abort_conn.  That way, all the pending events are processed
+by the fuse server and we don't end up with a corrupt filesystem.
+
+Signed-off-by: Darrick J. Wong <djwong@kernel.org>
+
+(imported from commit d4262f9cf5232394d518207863d1ad79f52b179e)
