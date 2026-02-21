@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "c1b11b24f24b37b2b7f4a30f7304aaa2b26a42fa",
-  "head": "dd372126b42d0618ef680cd23918cb15a52d21aa",
+  "prev": "22d698d7be44eaad99ab81b73e2fb848e9c26ab6",
+  "head": "43ab9071fa32a9b60552795b7858600ffb74b77f",
   "applied": [
     "rfc-fuse-set-request-unique-on",
     "fuse-io-uring-avoid-_send-code",
@@ -37,10 +37,10 @@
     "fs-fuse-fix-potential-memory",
     "fuse-fix-io-uring-list",
     "fuse-fix-missing-numa_q_map",
-    "fuse-allow-synchronous"
+    "fuse-allow-synchronous",
+    "fuse-compounds-fix-includes"
   ],
   "unapplied": [
-    "fuse-compounds-fix-includes",
     "create-workflow-the-create-pr",
     "fix-the-github-actions-pr",
     "remove-the-pull_request_target",
