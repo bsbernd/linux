@@ -1,7 +1,7 @@
 {
   "version": 5,
-  "prev": "2a87a1cae2c116741a9cc71cecf597a3779e612c",
-  "head": "570d484e4a7d8080b91e90aa57dad5467d91ed4b",
+  "prev": "74a7bdc2b924c8091222c2d3a50894a20f78adba",
+  "head": "f0db4cdb1289fe49562cc26a9ae598e370e653b4",
   "applied": [
     "io_uring-kbuf-refactor",
     "io_uring-kbuf-rename",
@@ -24,10 +24,10 @@
     "fuse-refactor-io-uring-header-1",
     "fuse-use-enum-types-for-header",
     "fuse-refactor-setting-up-copy",
-    "fuse-support-buffer-copying"
+    "fuse-support-buffer-copying",
+    "fuse-add-io-uring-kernel"
   ],
   "unapplied": [
-    "fuse-add-io-uring-kernel",
     "fuse-add-zero-copy-over-io",
     "docs-fuse-add-io-uring-bufring"
   ],
