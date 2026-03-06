@@ -927,17 +927,28 @@ static int fuse_copy_fill(struct fuse_copy_state *cs)
 }
 
 /* Do as much copy to/from userspace buffer as we can */
-static int fuse_copy_do(struct fuse_copy_state *cs, void **val, unsigned *size)
+static int fuse_copy_do(struct fuse_copy_state *cs, void **val, unsigned *size,
+			bool use_copy_page)
 {
 	unsigned ncpy = min(*size, cs->len);
 	if (val) {
 		void *pgaddr = kmap_local_page(cs->pg);
 		void *buf = pgaddr + cs->offset;
+		void *src, *dst;
 
-		if (cs->write)
-			memcpy(buf, *val, ncpy);
-		else
-			memcpy(*val, buf, ncpy);
+		if (cs->write) {
+			src = *val;
+			dst = buf;
+		} else {
+			src = buf;
+			dst = *val;
+		}
+
+		if (use_copy_page) {
+			copy_page(dst, src);
+		} else {
+			memcpy(dst, src, ncpy);
+		}
 
 		kunmap_local(pgaddr);
 		*val += ncpy;
@@ -1156,16 +1167,19 @@ static int fuse_copy_folio(struct fuse_copy_state *cs, struct folio **foliop,
 			void *buf = mapaddr;
 			unsigned int copy = count;
 			unsigned int bytes_copied;
+			bool use_copy_page;
 
 			if (folio_test_highmem(folio) && count > PAGE_SIZE - offset_in_page(offset))
 				copy = PAGE_SIZE - offset_in_page(offset);
 
-			bytes_copied = fuse_copy_do(cs, &buf, &copy);
+			use_copy_page = (copy == PAGE_SIZE);
+
+			bytes_copied = fuse_copy_do(cs, &buf, &copy, use_copy_page);
 			kunmap_local(mapaddr);
 			offset += bytes_copied;
 			count -= bytes_copied;
 		} else
-			offset += fuse_copy_do(cs, NULL, &count);
+			offset += fuse_copy_do(cs, NULL, &count, false);
 	}
 	if (folio && !cs->write)
 		flush_dcache_folio(folio);
@@ -1203,7 +1217,7 @@ static int fuse_copy_one(struct fuse_copy_state *cs, void *val, unsigned size)
 			if (err)
 				return err;
 		}
-		fuse_copy_do(cs, &val, &size);
+		fuse_copy_do(cs, &val, &size, false);
 	}
 	return 0;
 }
