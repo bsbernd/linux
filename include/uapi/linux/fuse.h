@@ -246,6 +246,7 @@
  *  - add fuse_uring_cmd_req init struct
  *  - add FUSE_URING_PINNED_HEADERS flag
  *  - add FUSE_URING_PINNED_BUFFERS flag
+ *  - add FUSE_URING_ZERO_COPY flag
  */
 
 #ifndef _LINUX_FUSE_H
@@ -1257,6 +1258,9 @@ struct fuse_supp_groups {
 #define FUSE_URING_IN_OUT_HEADER_SZ 128
 #define FUSE_URING_OP_IN_OUT_SZ 128
 
+/* Set if the ent's payload is zero-copied */
+#define FUSE_URING_ENT_ZERO_COPY	(1 << 0)
+
 /* Used as part of the fuse_uring_req_header */
 struct fuse_uring_ent_in_out {
 	uint64_t flags;
@@ -1310,6 +1314,7 @@ enum fuse_uring_cmd {
 #define FUSE_URING_BUFRING		(1 << 0)
 #define FUSE_URING_PINNED_HEADERS	(1 << 1)
 #define FUSE_URING_PINNED_BUFFERS	(1 << 2)
+#define FUSE_URING_ZERO_COPY		(1 << 3)
 
 /**
  * In the 80B command area of the SQE.

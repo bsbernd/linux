@@ -58,6 +58,8 @@ struct fuse_bufring_pinned {
 struct fuse_bufring {
 	bool use_pinned_headers: 1;
 	bool use_pinned_buffers: 1;
+	/* this is only allowed on privileged servers */
+	bool use_zero_copy: 1;
 	unsigned int queue_depth;
 
 	union {
@@ -96,6 +98,8 @@ struct fuse_ring_ent {
 			 */
 			unsigned int id;
 			struct fuse_bufring_buf payload_buf;
+			/* true if the request's pages are being zero-copied */
+			bool zero_copied;
 		};
 	};
 
