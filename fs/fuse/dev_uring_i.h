@@ -137,26 +137,12 @@ struct fuse_ring {
 
 bool fuse_uring_enabled(void);
 void fuse_uring_destruct(struct fuse_conn *fc);
-void fuse_uring_stop_queues(struct fuse_ring *ring);
-void fuse_uring_abort_end_requests(struct fuse_ring *ring);
+void fuse_uring_abort(struct fuse_conn *fc);
 int fuse_uring_cmd(struct io_uring_cmd *cmd, unsigned int issue_flags);
 void fuse_uring_queue_fuse_req(struct fuse_iqueue *fiq, struct fuse_req *req);
 bool fuse_uring_queue_bq_req(struct fuse_req *req);
 bool fuse_uring_remove_pending_req(struct fuse_req *req);
 bool fuse_uring_request_expired(struct fuse_conn *fc);
-
-static inline void fuse_uring_abort(struct fuse_conn *fc)
-{
-	struct fuse_ring *ring = fc->ring;
-
-	if (ring == NULL)
-		return;
-
-	if (atomic_read(&ring->queue_refs) > 0) {
-		fuse_uring_abort_end_requests(ring);
-		fuse_uring_stop_queues(ring);
-	}
-}
 
 static inline void fuse_uring_wait_stopped_queues(struct fuse_conn *fc)
 {

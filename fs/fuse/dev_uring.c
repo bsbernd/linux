@@ -129,7 +129,7 @@ static void fuse_uring_abort_end_queue_requests(struct fuse_ring_queue *queue)
 	fuse_dev_end_requests(&req_list);
 }
 
-void fuse_uring_abort_end_requests(struct fuse_ring *ring)
+static void fuse_uring_abort_end_requests(struct fuse_ring *ring)
 {
 	int qid;
 	struct fuse_ring_queue *queue;
@@ -477,7 +477,7 @@ static void fuse_uring_async_stop_queues(struct work_struct *work)
 /*
  * Stop the ring queues
  */
-void fuse_uring_stop_queues(struct fuse_ring *ring)
+static void fuse_uring_stop_queues(struct fuse_ring *ring)
 {
 	int qid;
 
@@ -498,6 +498,19 @@ void fuse_uring_stop_queues(struct fuse_ring *ring)
 				      FUSE_URING_TEARDOWN_INTERVAL);
 	} else {
 		wake_up_all(&ring->stop_waitq);
+	}
+}
+
+void fuse_uring_abort(struct fuse_conn *fc)
+{
+	struct fuse_ring *ring = fc->ring;
+
+	if (ring == NULL)
+		return;
+
+	if (atomic_read(&ring->queue_refs) > 0) {
+		fuse_uring_abort_end_requests(ring);
+		fuse_uring_stop_queues(ring);
 	}
 }
 
