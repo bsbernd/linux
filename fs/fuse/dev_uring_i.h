@@ -57,6 +57,7 @@ struct fuse_bufring_pinned {
 
 struct fuse_bufring {
 	bool use_pinned_headers: 1;
+	bool use_pinned_buffers: 1;
 	unsigned int queue_depth;
 
 	union {
@@ -64,6 +65,9 @@ struct fuse_bufring {
 		void __user *headers;
 		struct fuse_bufring_pinned pinned_headers;
 	};
+
+	/* only used if the buffers are pinned */
+	struct fuse_bufring_pinned pinned_bufs;
 
 	/* metadata tracking state of the bufring */
 	unsigned int nbufs;

@@ -52,6 +52,11 @@ static inline bool bufring_pinned_headers(struct fuse_ring_queue *queue)
 	return queue->bufring->use_pinned_headers;
 }
 
+static inline bool bufring_pinned_buffers(struct fuse_ring_queue *queue)
+{
+	return queue->bufring->use_pinned_buffers;
+}
+
 static void uring_cmd_set_ring_ent(struct io_uring_cmd *cmd,
 				   struct fuse_ring_ent *ring_ent)
 {
@@ -234,6 +239,11 @@ static void fuse_uring_bufring_unpin(struct fuse_ring_queue *queue)
 	if (bufring_pinned_headers(queue)) {
 		fuse_bufring_unpin_mem(&br->pinned_headers);
 		br->use_pinned_headers = false;
+	}
+
+	if (bufring_pinned_buffers(queue)) {
+		fuse_bufring_unpin_mem(&br->pinned_bufs);
+		br->use_pinned_buffers = false;
 	}
 }
 
@@ -474,6 +484,7 @@ static int fuse_uring_bufring_setup(struct io_uring_cmd *cmd,
 	unsigned int buf_size = READ_ONCE(cmd_req->init.buf_size);
 	struct iovec iov[FUSE_URING_IOV_SEGS];
 	bool pinned_headers = init_flags & FUSE_URING_PINNED_HEADERS;
+	bool pinned_bufs = init_flags & FUSE_URING_PINNED_BUFFERS;
 	void __user *payload, *headers;
 	size_t headers_size, payload_size, ring_size;
 	struct fuse_bufring *br;
@@ -523,7 +534,22 @@ static int fuse_uring_bufring_setup(struct io_uring_cmd *cmd,
 		br->headers = headers;
 	}
 
-	payload_addr = (uintptr_t)payload;
+	if (pinned_bufs) {
+		err = fuse_bufring_pin_mem(&br->pinned_bufs, payload,
+					   payload_size);
+		if (err) {
+			if (pinned_headers)
+				fuse_bufring_unpin_mem(&br->pinned_headers);
+			kfree(br);
+			return err;
+		}
+		br->use_pinned_buffers = true;
+	}
+
+	if (pinned_bufs)
+		payload_addr = (uintptr_t)br->pinned_bufs.addr;
+	else
+		payload_addr = (uintptr_t)payload;
 
 	/* populate the ring buffer */
 	for (i = 0; i < nr_bufs; i++, payload_addr += buf_size) {
@@ -553,6 +579,7 @@ static bool queue_init_flags_consistent(struct fuse_ring_queue *queue,
 {
 	bool bufring = init_flags & FUSE_URING_BUFRING;
 	bool pinned_headers = init_flags & FUSE_URING_PINNED_HEADERS;
+	bool pinned_bufs = init_flags & FUSE_URING_PINNED_BUFFERS;
 
 	if (bufring_enabled(queue) != bufring)
 		return false;
@@ -560,7 +587,8 @@ static bool queue_init_flags_consistent(struct fuse_ring_queue *queue,
 	if (!bufring)
 		return true;
 
-	return bufring_pinned_headers(queue) == pinned_headers;
+	return bufring_pinned_headers(queue) == pinned_headers &&
+		bufring_pinned_buffers(queue) == pinned_bufs;
 }
 
 static struct fuse_ring_queue *
@@ -1011,13 +1039,15 @@ static int setup_fuse_copy_state(struct fuse_copy_state *cs,
 				 struct fuse_ring_ent *ent, int dir,
 				 struct iov_iter *iter)
 {
-	void __user *payload;
+	void __user *payload = NULL;
+	bool use_bufring = bufring_enabled(ent->queue);
+	bool pinned_buffers = use_bufring && bufring_pinned_buffers(ent->queue);
 	int err;
 
-	if (bufring_enabled(ent->queue))
-		payload = (void __user *)ent->payload_buf.addr;
-	else
+	if (!use_bufring)
 		payload = ent->payload;
+	else if (!pinned_buffers)
+		payload = (void __user *)ent->payload_buf.addr;
 
 	if (payload) {
 		err = import_ubuf(dir, payload, ring->max_payload_sz, iter);
@@ -1028,6 +1058,12 @@ static int setup_fuse_copy_state(struct fuse_copy_state *cs,
 	}
 
 	fuse_copy_init(cs, dir == ITER_DEST, iter);
+
+	if (pinned_buffers) {
+		cs->is_kaddr = true;
+		cs->kaddr = (void *)ent->payload_buf.addr;
+		cs->len = ent->payload_buf.len;
+	}
 
 	cs->is_uring = true;
 	cs->req = req;
@@ -1608,11 +1644,13 @@ error:
 static bool init_flags_valid(u64 init_flags)
 {
 	u64 valid_flags =
-		FUSE_URING_BUFRING | FUSE_URING_PINNED_HEADERS;
+		FUSE_URING_BUFRING | FUSE_URING_PINNED_HEADERS |
+		FUSE_URING_PINNED_BUFFERS;
 	bool bufring = init_flags & FUSE_URING_BUFRING;
 	bool pinned_headers = init_flags & FUSE_URING_PINNED_HEADERS;
+	bool pinned_buffers = init_flags & FUSE_URING_PINNED_BUFFERS;
 
-	if (pinned_headers && !bufring)
+	if (!bufring && (pinned_headers || pinned_buffers))
 		return false;
 
 	return !(init_flags & ~valid_flags);
