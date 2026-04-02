@@ -277,6 +277,32 @@ out_err:
 	return res;
 }
 
+/*
+ * sqe->addr is a ptr to an iovec array, iov[FUSE_URING_IOV_HEADERS] has the
+ * headers, iov[FUSE_URING_IOV_PAYLOAD] the payload
+ */
+static int fuse_uring_get_iovec_from_sqe(const struct io_uring_sqe *sqe,
+					 struct iovec iov[FUSE_URING_IOV_SEGS])
+{
+	struct iovec __user *uiov = u64_to_user_ptr(READ_ONCE(sqe->addr));
+	struct iov_iter iter;
+	ssize_t ret;
+
+	if (sqe->len != FUSE_URING_IOV_SEGS)
+		return -EINVAL;
+
+	/*
+	 * Direction for buffer access will actually be READ and WRITE,
+	 * using write for the import should include READ access as well.
+	 */
+	ret = import_iovec(WRITE, uiov, FUSE_URING_IOV_SEGS,
+			   FUSE_URING_IOV_SEGS, &iov, &iter);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
 static struct fuse_ring_queue *fuse_uring_create_queue(struct fuse_ring *ring,
 						       int qid)
 {
@@ -1076,32 +1102,6 @@ static void fuse_uring_do_register(struct fuse_ring_ent *ent,
 	}
 }
 
-/*
- * sqe->addr is a ptr to an iovec array, iov[FUSE_URING_IOV_HEADERS] has the
- * headers, iov[FUSE_URING_IOV_PAYLOAD] the payload
- */
-static int fuse_uring_get_iovec_from_sqe(const struct io_uring_sqe *sqe,
-					 struct iovec iov[FUSE_URING_IOV_SEGS])
-{
-	struct iovec __user *uiov = u64_to_user_ptr(READ_ONCE(sqe->addr));
-	struct iov_iter iter;
-	ssize_t ret;
-
-	if (sqe->len != FUSE_URING_IOV_SEGS)
-		return -EINVAL;
-
-	/*
-	 * Direction for buffer access will actually be READ and WRITE,
-	 * using write for the import should include READ access as well.
-	 */
-	ret = import_iovec(WRITE, uiov, FUSE_URING_IOV_SEGS,
-			   FUSE_URING_IOV_SEGS, &iov, &iter);
-	if (ret < 0)
-		return ret;
-
-	return 0;
-}
-
 static struct fuse_ring_ent *
 fuse_uring_create_ring_ent(struct io_uring_cmd *cmd,
 			   struct fuse_ring_queue *queue)
@@ -1112,40 +1112,44 @@ fuse_uring_create_ring_ent(struct io_uring_cmd *cmd,
 	struct iovec *headers, *payload;
 	int err;
 
+	ent = kzalloc_obj(*ent, GFP_KERNEL_ACCOUNT);
+	if (!ent)
+		return ERR_PTR(-ENOMEM);
+
+	INIT_LIST_HEAD(&ent->list);
+
+	ent->queue = queue;
+
 	err = fuse_uring_get_iovec_from_sqe(cmd->sqe, iov);
 	if (err) {
 		pr_info_ratelimited("Failed to get iovec from sqe, err=%d\n",
 				    err);
-		return ERR_PTR(err);
+		goto error;
 	}
 
 	err = -EINVAL;
 	headers = &iov[FUSE_URING_IOV_HEADERS];
 	if (headers->iov_len < sizeof(struct fuse_uring_req_header)) {
 		pr_info_ratelimited("Invalid header len %zu\n", headers->iov_len);
-		return ERR_PTR(err);
+		goto error;
 	}
 
 	payload = &iov[FUSE_URING_IOV_PAYLOAD];
 	if (payload->iov_len < ring->max_payload_sz) {
 		pr_info_ratelimited("Invalid req payload len %zu\n",
 				    payload->iov_len);
-		return ERR_PTR(err);
+		goto error;
 	}
 
-	err = -ENOMEM;
-	ent = kzalloc_obj(*ent, GFP_KERNEL_ACCOUNT);
-	if (!ent)
-		return ERR_PTR(err);
-
-	INIT_LIST_HEAD(&ent->list);
-
-	ent->queue = queue;
 	ent->headers = headers->iov_base;
 	ent->payload = payload->iov_base;
 
 	atomic_inc(&ring->queue_refs);
 	return ent;
+
+error:
+	kfree(ent);
+	return ERR_PTR(err);
 }
 
 /*
