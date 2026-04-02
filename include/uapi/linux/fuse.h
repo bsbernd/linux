@@ -244,6 +244,7 @@
  *  7.46
  *  - add FUSE_URING_BUFRING flag
  *  - add fuse_uring_cmd_req init struct
+ *  - add FUSE_URING_PINNED_HEADERS flag
  */
 
 #ifndef _LINUX_FUSE_H
@@ -1306,6 +1307,7 @@ enum fuse_uring_cmd {
 
 /* fuse_uring_cmd_req flags */
 #define FUSE_URING_BUFRING		(1 << 0)
+#define FUSE_URING_PINNED_HEADERS	(1 << 1)
 
 /**
  * In the 80B command area of the SQE.

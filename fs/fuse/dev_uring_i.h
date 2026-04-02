@@ -42,11 +42,28 @@ struct fuse_bufring_buf {
 	unsigned int id;
 };
 
-struct fuse_bufring {
-	/* pointer to the headers buffer */
-	void __user *headers;
+struct fuse_bufring_pinned {
+	void *addr;
+	struct page **pages;
+	unsigned int nr_pages;
 
+	/*
+	 * need to track this so we can unpin / unaccount pages during teardown
+	 * when not running in the server's task context
+	 */
+	struct user_struct *user;
+	struct mm_struct *mm_account;
+};
+
+struct fuse_bufring {
+	bool use_pinned_headers: 1;
 	unsigned int queue_depth;
+
+	union {
+		/* pointer to the headers buffer */
+		void __user *headers;
+		struct fuse_bufring_pinned pinned_headers;
+	};
 
 	/* metadata tracking state of the bufring */
 	unsigned int nbufs;

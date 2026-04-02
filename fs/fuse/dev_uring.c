@@ -11,6 +11,7 @@
 
 #include <linux/fs.h>
 #include <linux/io_uring/cmd.h>
+#include <linux/vmalloc.h>
 
 static bool __read_mostly enable_uring;
 module_param(enable_uring, bool, 0644);
@@ -44,6 +45,11 @@ enum fuse_uring_header_type {
 static inline bool bufring_enabled(struct fuse_ring_queue *queue)
 {
 	return queue->bufring != NULL;
+}
+
+static inline bool bufring_pinned_headers(struct fuse_ring_queue *queue)
+{
+	return queue->bufring->use_pinned_headers;
 }
 
 static void uring_cmd_set_ring_ent(struct io_uring_cmd *cmd,
@@ -200,6 +206,37 @@ bool fuse_uring_request_expired(struct fuse_conn *fc)
 	return false;
 }
 
+static void fuse_bufring_unpin_mem(struct fuse_bufring_pinned *mem)
+{
+	struct page **pages = mem->pages;
+	unsigned int nr_pages = mem->nr_pages;
+	struct user_struct *user = mem->user;
+	struct mm_struct *mm_account = mem->mm_account;
+
+	vunmap(mem->addr);
+	unpin_user_pages(pages, nr_pages);
+
+	if (user) {
+		atomic_long_sub(nr_pages, &user->locked_vm);
+		free_uid(user);
+	}
+
+	atomic64_sub(nr_pages, &mm_account->pinned_vm);
+	mmdrop(mm_account);
+
+	kvfree(mem->pages);
+}
+
+static void fuse_uring_bufring_unpin(struct fuse_ring_queue *queue)
+{
+	struct fuse_bufring *br = queue->bufring;
+
+	if (bufring_pinned_headers(queue)) {
+		fuse_bufring_unpin_mem(&br->pinned_headers);
+		br->use_pinned_headers = false;
+	}
+}
+
 void fuse_uring_destruct(struct fuse_conn *fc)
 {
 	struct fuse_ring *ring = fc->ring;
@@ -227,7 +264,10 @@ void fuse_uring_destruct(struct fuse_conn *fc)
 		}
 
 		kfree(queue->fpq.processing);
-		kfree(queue->bufring);
+		if (bufring_enabled(queue)) {
+			fuse_uring_bufring_unpin(queue);
+			kfree(queue->bufring);
+		}
 		kfree(queue);
 		ring->queues[qid] = NULL;
 	}
@@ -309,14 +349,131 @@ static int fuse_uring_get_iovec_from_sqe(const struct io_uring_sqe *sqe,
 	return 0;
 }
 
+static struct page **fuse_uring_pin_user_pages(void __user *uaddr,
+					       unsigned long len, int *npages)
+{
+	unsigned long addr = (unsigned long)uaddr;
+	unsigned long start, end, nr_pages;
+	struct page **pages;
+	int pinned;
+
+	if (check_add_overflow(addr, len, &end))
+		return ERR_PTR(-EOVERFLOW);
+	if (check_add_overflow(end, PAGE_SIZE - 1, &end))
+		return ERR_PTR(-EOVERFLOW);
+
+	end = end >> PAGE_SHIFT;
+	start = addr >> PAGE_SHIFT;
+	nr_pages = end - start;
+	if (WARN_ON_ONCE(!nr_pages))
+		return ERR_PTR(-EINVAL);
+	if (WARN_ON_ONCE(nr_pages > INT_MAX))
+		return ERR_PTR(-EOVERFLOW);
+
+	pages = kvmalloc_objs(struct page *, nr_pages, GFP_KERNEL_ACCOUNT);
+	if (!pages)
+		return ERR_PTR(-ENOMEM);
+
+	pinned = pin_user_pages_fast(addr, nr_pages, FOLL_WRITE | FOLL_LONGTERM,
+				     pages);
+	/* success, mapped all pages */
+	if (pinned == nr_pages) {
+		*npages = nr_pages;
+		return pages;
+	}
+
+	/* remove any partial pins */
+	if (pinned > 0)
+		unpin_user_pages(pages, pinned);
+
+	kvfree(pages);
+
+	return ERR_PTR(pinned < 0 ? pinned : -EFAULT);
+}
+
+static int account_pinned_pages(struct fuse_bufring_pinned *mem,
+				struct page **pages, unsigned int nr_pages)
+{
+	unsigned long page_limit, cur_pages, new_pages;
+	struct user_struct *user = current_user();
+
+	if (!nr_pages)
+		return 0;
+
+	if (!capable(CAP_IPC_LOCK)) {
+		/* Don't allow more pages than we can safely lock */
+		page_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
+
+		cur_pages = atomic_long_read(&user->locked_vm);
+		do {
+			new_pages = cur_pages + nr_pages;
+			if (new_pages > page_limit)
+				return -ENOMEM;
+		} while (!atomic_long_try_cmpxchg(&user->locked_vm,
+						  &cur_pages, new_pages));
+
+		mem->user = get_uid(current_user());
+	}
+
+	atomic64_add(nr_pages, &current->mm->pinned_vm);
+	mmgrab(current->mm);
+	mem->mm_account = current->mm;
+
+	return 0;
+}
+
+static int fuse_bufring_pin_mem(struct fuse_bufring_pinned *mem,
+				void __user *addr, size_t len)
+{
+	struct page **pages = NULL;
+	int nr_pages;
+	int err;
+
+	if (!PAGE_ALIGNED(addr))
+		return -EINVAL;
+
+	pages = fuse_uring_pin_user_pages(addr, len, &nr_pages);
+	if (IS_ERR(pages))
+		return PTR_ERR(pages);
+
+	err = account_pinned_pages(mem, pages, nr_pages);
+	if (err)
+		goto unpin;
+
+	mem->addr = vmap(pages, nr_pages, VM_MAP, PAGE_KERNEL);
+	if (!mem->addr) {
+		err = -ENOMEM;
+		goto unaccount;
+	}
+
+	mem->pages = pages;
+	mem->nr_pages = nr_pages;
+
+	return 0;
+
+unaccount:
+	if (mem->user) {
+		atomic_long_sub(nr_pages, &mem->user->locked_vm);
+		free_uid(mem->user);
+	}
+	atomic64_sub(nr_pages, &current->mm->pinned_vm);
+	mmdrop(mem->mm_account);
+unpin:
+	unpin_user_pages(pages, nr_pages);
+	kvfree(pages);
+	return err;
+}
+
 static int fuse_uring_bufring_setup(struct io_uring_cmd *cmd,
-				     struct fuse_ring_queue *queue)
+				    struct fuse_ring_queue *queue,
+				    u64 init_flags)
 {
 	const struct fuse_uring_cmd_req *cmd_req =
 		io_uring_sqe128_cmd(cmd->sqe, struct fuse_uring_cmd_req);
 	u16 queue_depth = READ_ONCE(cmd_req->init.queue_depth);
 	unsigned int buf_size = READ_ONCE(cmd_req->init.buf_size);
 	struct iovec iov[FUSE_URING_IOV_SEGS];
+	bool pinned_headers = init_flags & FUSE_URING_PINNED_HEADERS;
 	void __user *payload, *headers;
 	size_t headers_size, payload_size, ring_size;
 	struct fuse_bufring *br;
@@ -354,7 +511,17 @@ static int fuse_uring_bufring_setup(struct io_uring_cmd *cmd,
 		return -ENOMEM;
 
 	br->queue_depth = queue_depth;
-	br->headers = headers;
+	if (pinned_headers) {
+		err = fuse_bufring_pin_mem(&br->pinned_headers, headers,
+					   headers_size);
+		if (err) {
+			kfree(br);
+			return err;
+		}
+		br->use_pinned_headers = true;
+	} else {
+		br->headers = headers;
+	}
 
 	payload_addr = (uintptr_t)payload;
 
@@ -385,8 +552,15 @@ static bool queue_init_flags_consistent(struct fuse_ring_queue *queue,
 					u64 init_flags)
 {
 	bool bufring = init_flags & FUSE_URING_BUFRING;
+	bool pinned_headers = init_flags & FUSE_URING_PINNED_HEADERS;
 
-	return bufring_enabled(queue) == bufring;
+	if (bufring_enabled(queue) != bufring)
+		return false;
+
+	if (!bufring)
+		return true;
+
+	return bufring_pinned_headers(queue) == pinned_headers;
 }
 
 static struct fuse_ring_queue *
@@ -423,7 +597,7 @@ fuse_uring_create_queue(struct io_uring_cmd *cmd, struct fuse_ring *ring,
 	fuse_pqueue_init(&queue->fpq);
 
 	if (use_bufring) {
-		int err = fuse_uring_bufring_setup(cmd, queue);
+		int err = fuse_uring_bufring_setup(cmd, queue, init_flags);
 
 		if (err) {
 			kfree(pq);
@@ -437,8 +611,10 @@ fuse_uring_create_queue(struct io_uring_cmd *cmd, struct fuse_ring *ring,
 	if (ring->queues[qid]) {
 		spin_unlock(&fc->lock);
 		kfree(queue->fpq.processing);
-		if (use_bufring)
+		if (use_bufring) {
+			fuse_uring_bufring_unpin(queue);
 			kfree(queue->bufring);
+		}
 		kfree(queue);
 
 		queue = ring->queues[qid];
@@ -605,6 +781,25 @@ static void fuse_uring_async_stop_queues(struct work_struct *work)
 	}
 }
 
+static void fuse_uring_unpin_queues(struct fuse_ring *ring)
+{
+	int qid;
+
+	for (qid = 0; qid < ring->nr_queues; qid++) {
+		struct fuse_ring_queue *queue = READ_ONCE(ring->queues[qid]);
+		struct fuse_bufring *br;
+
+		if (!queue)
+			continue;
+
+		br = queue->bufring;
+		if (!br)
+			continue;
+
+		fuse_uring_bufring_unpin(queue);
+	}
+}
+
 /*
  * Stop the ring queues
  */
@@ -643,6 +838,9 @@ void fuse_uring_abort(struct fuse_conn *fc)
 		fuse_uring_abort_end_requests(ring);
 		fuse_uring_stop_queues(ring);
 	}
+
+	/* unpin while in process context - can't do this in softirq */
+	fuse_uring_unpin_queues(ring);
 }
 
 /*
@@ -758,6 +956,11 @@ static int copy_header_to_ring(struct fuse_ring_ent *ent,
 		int buf_offset = offset +
 			sizeof(struct fuse_uring_req_header) * ent->id;
 
+		if (bufring_pinned_headers(ent->queue)) {
+			memcpy(ent->queue->bufring->pinned_headers.addr + buf_offset,
+			       header, header_size);
+			return 0;
+		}
 		ring = ent->queue->bufring->headers + buf_offset;
 	} else {
 		ring = (void __user *)ent->headers + offset;
@@ -785,6 +988,11 @@ static int copy_header_from_ring(struct fuse_ring_ent *ent,
 		int buf_offset = offset +
 			sizeof(struct fuse_uring_req_header) * ent->id;
 
+		if (bufring_pinned_headers(ent->queue)) {
+			memcpy(header, ent->queue->bufring->pinned_headers.addr + buf_offset,
+			       header_size);
+			return 0;
+		}
 		ring = ent->queue->bufring->headers + buf_offset;
 	} else {
 		ring = (void __user *)ent->headers + offset;
@@ -1399,7 +1607,13 @@ error:
 
 static bool init_flags_valid(u64 init_flags)
 {
-	u64 valid_flags = FUSE_URING_BUFRING;
+	u64 valid_flags =
+		FUSE_URING_BUFRING | FUSE_URING_PINNED_HEADERS;
+	bool bufring = init_flags & FUSE_URING_BUFRING;
+	bool pinned_headers = init_flags & FUSE_URING_PINNED_HEADERS;
+
+	if (pinned_headers && !bufring)
+		return false;
 
 	return !(init_flags & ~valid_flags);
 }
