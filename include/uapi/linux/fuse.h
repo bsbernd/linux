@@ -240,6 +240,10 @@
  *  - add FUSE_COPY_FILE_RANGE_64
  *  - add struct fuse_copy_file_range_out
  *  - add FUSE_NOTIFY_PRUNE
+ *
+ *  7.46
+ *  - add FUSE_URING_BUFRING flag
+ *  - add fuse_uring_cmd_req init struct
  */
 
 #ifndef _LINUX_FUSE_H
@@ -1263,7 +1267,13 @@ struct fuse_uring_ent_in_out {
 
 	/* size of user payload buffer */
 	uint32_t payload_sz;
-	uint32_t padding;
+
+	/*
+	 * if using bufrings, this is the id of the selected buffer.
+	 * the selected buffer holds the request payload
+	 */
+	uint16_t buf_id;
+	uint16_t padding;
 
 	uint64_t reserved;
 };
@@ -1294,6 +1304,9 @@ enum fuse_uring_cmd {
 	FUSE_IO_URING_CMD_COMMIT_AND_FETCH = 2,
 };
 
+/* fuse_uring_cmd_req flags */
+#define FUSE_URING_BUFRING		(1 << 0)
+
 /**
  * In the 80B command area of the SQE.
  */
@@ -1305,7 +1318,17 @@ struct fuse_uring_cmd_req {
 
 	/* queue the command is for (queue index) */
 	uint16_t qid;
-	uint8_t padding[6];
+	uint16_t padding;
+
+	union {
+		struct {
+			/* size of the bufring's backing buffers */
+			uint32_t buf_size;
+			/* number of entries in the queue */
+			uint16_t queue_depth;
+			uint16_t padding;
+		} init;
+	};
 };
 
 #endif /* _LINUX_FUSE_H */

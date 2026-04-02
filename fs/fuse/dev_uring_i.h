@@ -36,11 +36,47 @@ enum fuse_ring_req_state {
 	FRRS_RELEASED,
 };
 
+struct fuse_bufring_buf {
+	uintptr_t addr;
+	unsigned int len;
+	unsigned int id;
+};
+
+struct fuse_bufring {
+	/* pointer to the headers buffer */
+	void __user *headers;
+
+	unsigned int queue_depth;
+
+	/* metadata tracking state of the bufring */
+	unsigned int nbufs;
+	unsigned int head;
+	unsigned int tail;
+
+	/* the buffers backing the ring */
+	__DECLARE_FLEX_ARRAY(struct fuse_bufring_buf, bufs);
+};
+
 /** A fuse ring entry, part of the ring queue */
 struct fuse_ring_ent {
-	/* userspace buffer */
-	struct fuse_uring_req_header __user *headers;
-	void __user *payload;
+	union {
+		/* if bufrings are not used */
+		struct {
+			/* userspace buffers */
+			struct fuse_uring_req_header __user *headers;
+			void __user *payload;
+		};
+		/* if bufrings are used */
+		struct {
+			/*
+			 * unique fixed id for the ent. used by kernel/server to
+			 * locate where in the headers buffer the data for this
+			 * ent resides
+			 */
+			unsigned int id;
+			struct fuse_bufring_buf payload_buf;
+		};
+	};
 
 	/* the ring queue that owns the request */
 	struct fuse_ring_queue *queue;
@@ -99,6 +135,9 @@ struct fuse_ring_queue {
 	unsigned int active_background;
 
 	bool stopped;
+
+	/* only allocated if the server uses bufrings */
+	struct fuse_bufring *bufring;
 };
 
 /**
