@@ -1043,6 +1043,10 @@ void fuse_conn_put(struct fuse_conn *fc)
 	}
 	if (IS_ENABLED(CONFIG_FUSE_PASSTHROUGH))
 		fuse_backing_files_free(fc);
+
+	/* Must be before call_rcu() as debugfs_remove() can sleep */
+	fuse_debugfs_conn_cleanup(fc);
+
 	call_rcu(&fc->rcu, delayed_release);
 }
 EXPORT_SYMBOL_GPL(fuse_conn_put);
@@ -1866,9 +1870,12 @@ int fuse_fill_super_common(struct super_block *sb, struct fuse_fs_context *ctx)
 
 	fc->dev = sb->s_dev;
 	fm->sb = sb;
+
+	fuse_debugfs_conn_init(fc);
+
 	err = fuse_bdi_init(fc, sb);
 	if (err)
-		goto err_dev_free;
+		goto err_debugfs_cleanup;
 
 	/* Handle umasking inside the fuse code */
 	if (sb->s_flags & SB_POSIXACL)
@@ -1920,6 +1927,8 @@ int fuse_fill_super_common(struct super_block *sb, struct fuse_fs_context *ctx)
  err_dev_free:
 	if (fud)
 		fuse_dev_free(fud);
+ err_debugfs_cleanup:
+	fuse_debugfs_conn_cleanup(fc);
  err_free_dax:
 	if (IS_ENABLED(CONFIG_FUSE_DAX))
 		fuse_dax_conn_free(fc);
@@ -2287,6 +2296,10 @@ static int __init fuse_init(void)
 	if (res)
 		goto err_sysfs_cleanup;
 
+	res = fuse_debugfs_init();
+	if (res)
+		goto err_ctl_cleanup;
+
 	fuse_dentry_tree_init();
 
 	sanitize_global_limit(&max_user_bgreq);
@@ -2294,6 +2307,8 @@ static int __init fuse_init(void)
 
 	return 0;
 
+ err_ctl_cleanup:
+	fuse_ctl_cleanup();
  err_sysfs_cleanup:
 	fuse_sysfs_cleanup();
  err_dev_cleanup:
@@ -2309,6 +2324,7 @@ static void __exit fuse_exit(void)
 	pr_debug("exit\n");
 
 	fuse_dentry_tree_cleanup();
+	fuse_debugfs_cleanup();
 	fuse_ctl_cleanup();
 	fuse_sysfs_cleanup();
 	fuse_fs_cleanup();

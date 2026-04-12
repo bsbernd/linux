@@ -995,6 +995,11 @@ struct fuse_conn {
 		/* Request timeout (in jiffies). 0 = no timeout */
 		unsigned int req_timeout;
 	} timeout;
+
+#ifdef CONFIG_DEBUG_FS
+	/** debugfs directory for this connection */
+	struct dentry *debugfs_dir;
+#endif
 };
 
 /*
@@ -1249,7 +1254,7 @@ int fuse_dev_init(void);
 void fuse_dev_cleanup(void);
 
 int fuse_ctl_init(void);
-void __exit fuse_ctl_cleanup(void);
+void fuse_ctl_cleanup(void);
 
 /**
  * Simple request sending that does request allocation and freeing
@@ -1615,6 +1620,21 @@ ssize_t fuse_passthrough_splice_write(struct pipe_inode_info *pipe,
 				      struct file *out, loff_t *ppos,
 				      size_t len, unsigned int flags);
 ssize_t fuse_passthrough_mmap(struct file *file, struct vm_area_struct *vma);
+
+/* debugfs.c */
+#ifdef CONFIG_DEBUG_FS
+int fuse_debugfs_init(void);
+void fuse_debugfs_cleanup(void);
+void fuse_debugfs_conn_init(struct fuse_conn *fc);
+void fuse_debugfs_conn_cleanup(struct fuse_conn *fc);
+void fuse_debugfs_uring_register(struct fuse_conn *fc);
+#else
+static inline int fuse_debugfs_init(void) { return 0; }
+static inline void fuse_debugfs_cleanup(void) { }
+static inline void fuse_debugfs_conn_init(struct fuse_conn *fc) { }
+static inline void fuse_debugfs_conn_cleanup(struct fuse_conn *fc) { }
+static inline void fuse_debugfs_uring_register(struct fuse_conn *fc) { }
+#endif
 
 #ifdef CONFIG_SYSCTL
 extern int fuse_sysctl_register(void);
