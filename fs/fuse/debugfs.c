@@ -35,6 +35,20 @@ static const char *fuse_ring_req_state_name(enum fuse_ring_req_state state)
 		return "UNKNOWN";
 	}
 }
+
+static const char *fuse_payload_mode_name(enum fuse_queue_payload_mode mode)
+{
+	switch (mode) {
+	case FUSE_PAYLOAD_UNSET:
+		return "unset";
+	case FUSE_PAYLOAD_PER_ENT:
+		return "per-entry";
+	case FUSE_PAYLOAD_BUFPOOL:
+		return "bufpool";
+	default:
+		return "unknown";
+	}
+}
 #endif
 
 static void fuse_debugfs_show_req(struct seq_file *sf, struct fuse_req *req,
@@ -283,6 +297,7 @@ static int fuse_debugfs_uring_state_show(struct seq_file *sf, void *priv)
 	struct fuse_chan *fch;
 	struct fuse_ring *ring;
 	struct fuse_ring_queue *queue;
+	struct fuse_bufpool *pool;
 	int qid;
 
 	if (!fc) {
@@ -311,6 +326,7 @@ static int fuse_debugfs_uring_state_show(struct seq_file *sf, void *priv)
 
 	/* Ring state */
 	seq_printf(sf, "Ring ready: %s\n", ring->ready ? "yes" : "no");
+	seq_printf(sf, "Reduced queues: %s\n", ring->reduced_q ? "yes" : "no");
 	seq_printf(sf, "Max number of queues: %zu\n", ring->max_nr_queues);
 	seq_printf(sf, "Max payload size: %zu\n", ring->max_payload_sz);
 
@@ -335,6 +351,22 @@ static int fuse_debugfs_uring_state_show(struct seq_file *sf, void *priv)
 			   list_count_nodes(&queue->fuse_req_queue));
 		seq_printf(sf, "    background requests: %zu\n",
 			   list_count_nodes(&queue->fuse_req_bg_queue));
+		seq_printf(sf, "    payload: %s\n",
+			   fuse_payload_mode_name(queue->payload_mode));
+		seq_printf(sf, "    zero_copy: %s\n",
+			   queue->zero_copy ? "yes" : "no");
+		pool = queue->bufpool;
+		if (pool) {
+			seq_printf(sf, "    bufpool: buf_size=%zu nr_bufs=%u free_bufs=%u",
+				   pool->buf_size, pool->nr_bufs,
+				   bitmap_weight(pool->free_map, pool->nr_bufs));
+			if (pool->registered)
+				seq_printf(sf, " registered_index=%u",
+					   pool->registered_index);
+			else
+				seq_puts(sf, " not registered");
+			seq_puts(sf, "\n");
+		}
 		spin_unlock(&queue->lock);
 	}
 
@@ -364,6 +396,17 @@ static int fuse_debugfs_print_ent_list(struct seq_file *sf,
 				   ent->fuse_req->in.h.unique,
 				   ent->fuse_req->in.h.opcode);
 		}
+
+		seq_printf(sf, " payload=0x%lx len=%zu",
+			   (unsigned long)ent->payload.iov_base,
+			   ent->payload.iov_len);
+		/* bufpool: buf_id is only valid while payload.iov_base is set */
+		if (ent->queue->payload_mode == FUSE_PAYLOAD_BUFPOOL &&
+		    ent->payload.iov_base)
+			seq_printf(sf, " buf_id=%u", ent->buf_id);
+		if (ent->zero_copied)
+			seq_printf(sf, " zero_copy_index=%u",
+				   ent->zero_copy_index);
 		seq_puts(sf, "\n");
 		count++;
 	}
@@ -431,6 +474,72 @@ static int fuse_debugfs_list_ring_entries_show(struct seq_file *sf, void *priv)
 	seq_printf(sf, "Total ring entries: %d\n", total_entries);
 	return 0;
 }
+
+/* Helper to show a single queue map */
+static void fuse_debugfs_show_queue_map(struct seq_file *sf,
+					struct fuse_queue_map *q_map,
+					size_t max_nr_queues, int node)
+{
+	int cpu;
+
+	seq_printf(sf, "  Number of queues: %zu\n", q_map->nr_queues);
+	seq_printf(sf, "  Registered queue mask: %*pbl\n",
+		   cpumask_pr_args(q_map->registered_q_mask));
+	seq_puts(sf, "  CPU -> qid:\n");
+
+	for (cpu = 0; cpu < max_nr_queues; cpu++) {
+		if (node != -1 && cpu_to_node(cpu) != node)
+			continue;
+		seq_printf(sf, "    CPU %3d -> qid %3d\n",
+			   cpu, q_map->cpu_to_qid[cpu]);
+	}
+	seq_puts(sf, "\n");
+}
+
+/* Show CPU to qid mappings */
+static int fuse_debugfs_cpu_qid_map_show(struct seq_file *sf, void *priv)
+{
+	struct fuse_conn *fc = sf->private;
+	struct fuse_ring *ring;
+	struct fuse_queue_maps *maps;
+	struct fuse_queue_map *q_map;
+	int node;
+
+	if (!fc)
+		return 0;
+
+	ring = READ_ONCE(fc->chan->ring);
+	if (!ring)
+		return 0;
+
+	seq_printf(sf, "Ring ready: %s\n", ring->ready ? "yes" : "no");
+	seq_printf(sf, "Reduced queues: %s\n\n", ring->reduced_q ? "yes" : "no");
+
+	/* without reduced queues, ring->ready waits for all queues */
+	rcu_read_lock();
+	maps = rcu_dereference(ring->q_maps);
+	if (maps) {
+		/* Global CPU to qid mapping */
+		seq_puts(sf, "Global CPU to qid mapping:\n");
+		fuse_debugfs_show_queue_map(sf, &maps->global,
+					    ring->max_nr_queues, -1);
+
+		/* Per-NUMA node CPU to qid mappings */
+		for (node = 0; node < nr_node_ids; node++) {
+			q_map = &maps->numa[node];
+			if (!q_map->nr_queues)
+				continue;
+
+			seq_printf(sf, "NUMA node %d CPU to qid mapping:\n",
+				   node);
+			fuse_debugfs_show_queue_map(sf, q_map,
+						    ring->max_nr_queues, node);
+		}
+	}
+	rcu_read_unlock();
+
+	return 0;
+}
 #endif /* CONFIG_FUSE_IO_URING */
 
 static int fuse_debugfs_list_requests_open(struct inode *inode, struct file *file)
@@ -456,6 +565,11 @@ static int fuse_debugfs_list_ring_entries_open(struct inode *inode, struct file 
 	return single_open(file, fuse_debugfs_list_ring_entries_show, inode->i_private);
 }
 
+static int fuse_debugfs_cpu_qid_map_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, fuse_debugfs_cpu_qid_map_show, inode->i_private);
+}
+
 static const struct file_operations fuse_debugfs_uring_state_ops = {
 	.open = fuse_debugfs_uring_state_open,
 	.read = seq_read,
@@ -465,6 +579,13 @@ static const struct file_operations fuse_debugfs_uring_state_ops = {
 
 static const struct file_operations fuse_debugfs_list_ring_entries_ops = {
 	.open = fuse_debugfs_list_ring_entries_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static const struct file_operations fuse_debugfs_cpu_qid_map_ops = {
+	.open = fuse_debugfs_cpu_qid_map_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
 	.release = single_release,
@@ -505,6 +626,10 @@ void fuse_debugfs_conn_init(struct fuse_conn *fc)
 
 	debugfs_create_file("list_ring_entries", 0444, fc->debugfs_dir, fc,
 			    &fuse_debugfs_list_ring_entries_ops);
+
+	/* Create cpu_qid_map for io-uring */
+	debugfs_create_file("cpu_qid_map", 0444, fc->debugfs_dir, fc,
+			    &fuse_debugfs_cpu_qid_map_ops);
 #endif
 }
 
