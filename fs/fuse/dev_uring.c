@@ -1188,6 +1188,7 @@ static int fuse_uring_register(struct io_uring_cmd *cmd,
 		WRITE_ONCE(fiq->ops, &fuse_io_uring_ops);
 		WRITE_ONCE(ring->ready, true);
 		wake_up_all(&fc->blocked_waitq);
+		fuse_debugfs_uring_register(fc);
 	}
 
 	spin_lock(&queue->lock);
