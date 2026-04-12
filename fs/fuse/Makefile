@@ -18,5 +18,6 @@ fuse-$(CONFIG_FUSE_VDAX) += dax.o
 fuse-$(CONFIG_FUSE_PASSTHROUGH) += passthrough.o backing.o ext_map.o
 fuse-$(CONFIG_SYSCTL) += sysctl.o
 fuse-$(CONFIG_FUSE_IO_URING) += dev_uring.o
+fuse-$(CONFIG_DEBUG_FS) += debugfs.o
 
 virtiofs-y := virtio_fs.o
