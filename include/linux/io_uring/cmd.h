@@ -115,6 +115,37 @@ struct io_br_sel io_ring_buffer_select(struct io_kiocb *req, size_t *len,
 				       struct io_buffer_list *bl,
 				       unsigned int issue_flags);
 
+/**
+ * struct io_ring_buf - describes a selected ring buffer entry
+ * @len:       buffer length in bytes
+ * @buf_id:    buffer ID (for CQE reporting / recycling)
+ * @nr_bvecs:  number of valid bvec entries (set by get_pages)
+ *
+ * Private fields - consumers must not inspect them.
+ */
+struct io_ring_buf {
+	size_t			len;
+	unsigned int		buf_id;
+	unsigned int		nr_bvecs;
+
+	/* private */
+	u64			addr;
+	u8			is_pinned;
+};
+
+int io_ring_buf_get_pages(struct io_buffer_list *bl,
+			  struct io_ring_buf *buf,
+			  struct bio_vec *bvec, unsigned int max_bvecs);
+void io_ring_buf_put_pages(struct io_buffer_list *bl,
+			   struct io_ring_buf *buf,
+			   struct bio_vec *bvec);
+int io_ring_buf_init_kbuf_bvec(struct io_ring_buf *buf,
+			       struct bio_vec *bvec, unsigned int max_bvecs);
+void io_ring_buf_recycle(struct io_uring_cmd *cmd,
+			 unsigned int buf_group,
+			 unsigned int issue_flags,
+			 struct io_ring_buf *buf);
+
 int io_buffer_register_request(struct io_uring_cmd *cmd, struct request *rq,
 			       void (*release)(void *), unsigned int index,
 			       unsigned int issue_flags);
@@ -213,6 +244,26 @@ static inline struct io_br_sel io_ring_buffer_select(struct io_kiocb *req,
 	};
 	return sel;
 }
+static inline int io_ring_buf_get_pages(struct io_buffer_list *bl,
+					struct io_ring_buf *buf,
+					struct bio_vec *bvec,
+					unsigned int max_bvecs)
+{
+	return -EOPNOTSUPP;
+}
+static inline void io_ring_buf_put_pages(struct io_buffer_list *bl,
+					 struct io_ring_buf *buf,
+					 struct bio_vec *bvec) { }
+static inline int io_ring_buf_init_kbuf_bvec(struct io_ring_buf *buf,
+					     struct bio_vec *bvec,
+					     unsigned int max_bvecs)
+{
+	return -EOPNOTSUPP;
+}
+static inline void io_ring_buf_recycle(struct io_uring_cmd *cmd,
+				       unsigned int buf_group,
+				       unsigned int issue_flags,
+				       struct io_ring_buf *buf) { }
 static inline int io_buffer_register_request(struct io_uring_cmd *cmd,
 					     struct request *rq,
 					     void (*release)(void *),
