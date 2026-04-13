@@ -59,7 +59,8 @@ static bool io_mem_alloc_compound(struct page **pages, int nr_pages,
 	return true;
 }
 
-struct page **io_pin_pages(unsigned long uaddr, unsigned long len, int *npages)
+struct page **io_pin_pages(unsigned long uaddr, unsigned long len,
+			   int *npages, bool longterm)
 {
 	unsigned long start, end, nr_pages;
 	struct page **pages;
@@ -82,8 +83,9 @@ struct page **io_pin_pages(unsigned long uaddr, unsigned long len, int *npages)
 	if (!pages)
 		return ERR_PTR(-ENOMEM);
 
-	ret = pin_user_pages_fast(uaddr, nr_pages, FOLL_WRITE | FOLL_LONGTERM,
-					pages);
+	ret = pin_user_pages_fast(uaddr, nr_pages,
+				  FOLL_WRITE | (longterm ? FOLL_LONGTERM : 0),
+				  pages);
 	/* success, mapped all pages */
 	if (ret == nr_pages) {
 		*npages = nr_pages;
@@ -164,7 +166,7 @@ static int io_region_pin_pages(struct io_mapped_region *mr,
 	struct page **pages;
 	int nr_pages;
 
-	pages = io_pin_pages(reg->user_addr, size, &nr_pages);
+	pages = io_pin_pages(reg->user_addr, size, &nr_pages, true);
 	if (IS_ERR(pages))
 		return PTR_ERR(pages);
 	if (WARN_ON_ONCE(nr_pages != mr->nr_pages))

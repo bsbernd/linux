@@ -200,7 +200,7 @@ static int io_import_umem(struct io_zcrx_ifq *ifq,
 	if (!area_reg->addr)
 		return -EFAULT;
 	pages = io_pin_pages((unsigned long)area_reg->addr, area_reg->len,
-				   &nr_pages);
+				   &nr_pages, true);
 	if (IS_ERR(pages))
 		return PTR_ERR(pages);
 
