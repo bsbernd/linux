@@ -17,6 +17,7 @@
 #include "io_uring.h"
 #include "openclose.h"
 #include "rsrc.h"
+#include "kbuf.h"
 #include "memmap.h"
 #include "register.h"
 
@@ -1070,6 +1071,102 @@ unlock:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(io_buffer_unregister);
+
+/*
+ * Pin user pages for a short-lived per-request buffer access and
+ * populate a caller-provided bvec array.  Pages are pinned without
+ * FOLL_LONGTERM - the caller must unpin promptly after the copy
+ * via io_ring_buf_unpin_user().  May sleep.
+ */
+static int io_ring_buf_pin_user(void __user *uaddr, size_t len,
+				struct bio_vec *bvec, unsigned int max_bvecs,
+				unsigned int *nr_bvecs_out)
+{
+	unsigned long start = (unsigned long)uaddr;
+	unsigned long off = start & ~PAGE_MASK;
+	int nr_pages;
+	struct page **pages;
+	size_t remaining;
+	unsigned int i;
+
+	pages = io_pin_pages(start, len, &nr_pages, false);
+	if (IS_ERR(pages))
+		return PTR_ERR(pages);
+
+	if (nr_pages > max_bvecs) {
+		unpin_user_pages(pages, nr_pages);
+		kvfree(pages);
+		return -EINVAL;
+	}
+
+	remaining = len;
+	for (i = 0; i < nr_pages; i++) {
+		unsigned int chunk = min_t(size_t, remaining,
+					   PAGE_SIZE - off);
+		bvec_set_page(&bvec[i], pages[i], chunk, off);
+		remaining -= chunk;
+		off = 0;
+	}
+	*nr_bvecs_out = nr_pages;
+
+	kvfree(pages);
+	return 0;
+}
+
+/* Unpin pages previously pinned by io_ring_buf_pin_user(). */
+static void io_ring_buf_unpin_user(struct bio_vec *bvec,
+				   unsigned int nr_bvecs)
+{
+	unsigned int i;
+
+	for (i = 0; i < nr_bvecs; i++)
+		unpin_user_folio(page_folio(bvec[i].bv_page), 1);
+}
+
+/*
+ * Acquire page-level access to a ring buffer.
+ *
+ * kBuf: no-op - bvec was pre-filled at buffer selection time
+ *       (pages are kernel-owned, always resident).
+ * pBuf: pin user pages via short-term GUP (no FOLL_LONGTERM),
+ *       fill bvec.  May sleep.
+ *
+ * Caller must not hold spinlocks.
+ */
+int io_ring_buf_get_pages(struct io_buffer_list *bl,
+			  struct io_ring_buf *buf,
+			  struct bio_vec *bvec, unsigned int max_bvecs)
+{
+	int ret;
+
+	/* kBuf: bvec already filled at selection time */
+	if (bl->flags & IOBL_KERNEL_MANAGED)
+		return 0;
+
+	/* pBuf: pin user pages for the duration of the copy */
+	ret = io_ring_buf_pin_user(u64_to_user_ptr(buf->addr), buf->len,
+				   bvec, max_bvecs, &buf->nr_bvecs);
+	if (!ret)
+		buf->is_pinned = 1;
+	return ret;
+}
+EXPORT_SYMBOL_GPL(io_ring_buf_get_pages);
+
+/*
+ * Release page-level access.
+ * kBuf: no-op.  pBuf: unpins user pages.
+ */
+void io_ring_buf_put_pages(struct io_buffer_list *bl,
+			   struct io_ring_buf *buf,
+			   struct bio_vec *bvec)
+{
+	if (buf->is_pinned) {
+		io_ring_buf_unpin_user(bvec, buf->nr_bvecs);
+		buf->is_pinned = 0;
+	}
+	buf->nr_bvecs = 0;
+}
+EXPORT_SYMBOL_GPL(io_ring_buf_put_pages);
 
 static int validate_fixed_range(u64 buf_addr, size_t len,
 				const struct io_mapped_ubuf *imu)
