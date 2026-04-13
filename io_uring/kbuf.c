@@ -938,3 +938,66 @@ bool io_uring_is_kmbuf_ring(struct io_uring_cmd *cmd, unsigned int buf_group,
 	return is_kmbuf_ring;
 }
 EXPORT_SYMBOL_GPL(io_uring_is_kmbuf_ring);
+
+/*
+ * Pre-fill bvec for a kBuf buffer.  Called once at buffer selection
+ * time - the pages are kernel-owned and never change.
+ */
+int io_ring_buf_init_kbuf_bvec(struct io_ring_buf *buf,
+			       struct bio_vec *bvec, unsigned int max_bvecs)
+{
+	void *kaddr = (void *)(uintptr_t)buf->addr;
+	unsigned int pg_off = offset_in_page(kaddr);
+	unsigned int nr = 0;
+	size_t remaining = buf->len;
+
+	while (remaining && nr < max_bvecs) {
+		struct page *page = vmalloc_to_page(kaddr);
+		unsigned int chunk = min_t(size_t, remaining,
+					   PAGE_SIZE - pg_off);
+		bvec_set_page(&bvec[nr], page, chunk, pg_off);
+		nr++;
+		kaddr += chunk;
+		remaining -= chunk;
+		pg_off = 0;
+	}
+	buf->nr_bvecs = nr;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(io_ring_buf_init_kbuf_bvec);
+
+/*
+ * Recycle a buffer entry back into the ring tail.
+ * Pages must have been released first.
+ */
+void io_ring_buf_recycle(struct io_uring_cmd *cmd,
+			 unsigned int buf_group,
+			 unsigned int issue_flags,
+			 struct io_ring_buf *buf)
+{
+	struct io_ring_ctx *ctx = cmd_to_io_kiocb(cmd)->ctx;
+	struct io_buffer_list *bl;
+	struct io_uring_buf_ring *br;
+	struct io_uring_buf *slot;
+
+	WARN_ON_ONCE(buf->is_pinned);
+
+	io_ring_submit_lock(ctx, issue_flags);
+
+	bl = io_buffer_get_list(ctx, buf_group);
+	if (WARN_ON_ONCE(!bl))
+		goto out;
+
+	br = bl->buf_ring;
+	if (WARN_ON_ONCE((__u16)(br->tail - bl->head) >= bl->nr_entries))
+		goto out;
+
+	slot = &br->bufs[br->tail & bl->mask];
+	slot->addr = buf->addr;
+	slot->len = buf->len;
+	slot->bid = buf->buf_id;
+	br->tail++;
+out:
+	io_ring_submit_unlock(ctx, issue_flags);
+}
+EXPORT_SYMBOL_GPL(io_ring_buf_recycle);
