@@ -1474,6 +1474,36 @@ static inline bool ublk_need_map_req(const struct request *req)
 	return ublk_rq_has_data(req) && req_op(req) == REQ_OP_WRITE;
 }
 
+/*
+ * Copy between request bvecs and a pinned kernel buffer.
+ * dir: ITER_DEST = write to kbuf (WRITE path), ITER_SOURCE = read from kbuf (READ path)
+ */
+static size_t ublk_copy_pinned(const struct request *req, void *kbuf,
+			       unsigned int kbuf_len, int dir)
+{
+	struct req_iterator iter;
+	struct bio_vec bv;
+	size_t done = 0;
+
+	rq_for_each_segment(bv, req, iter) {
+		unsigned int len = min(bv.bv_len, kbuf_len - (unsigned int)done);
+		void *bv_buf;
+
+		if (!len)
+			break;
+
+		bv_buf = kmap_local_page(bv.bv_page) + bv.bv_offset;
+		if (dir == ITER_DEST)
+			memcpy(kbuf + done, bv_buf, len);
+		else
+			memcpy(bv_buf, kbuf + done, len);
+		kunmap_local(bv_buf);
+
+		done += len;
+	}
+	return done;
+}
+
 /* Get the effective userspace buffer address for copy operations */
 static inline __u64 ublk_io_buf_addr(const struct ublk_queue *ubq,
 				      const struct ublk_io *io)
@@ -1504,12 +1534,20 @@ static unsigned int ublk_map_io(const struct ublk_queue *ubq,
 	 * context is pretty fast, see ublk_pin_user_pages
 	 */
 	if (ublk_need_map_req(req)) {
-		struct iov_iter iter;
-		const int dir = ITER_DEST;
+		/* pinned: memcpy via kaddr, no page table walk */
+		if (ublk_support_pinned_bufs(ubq) && io->sel_buf.kaddr)
+			return ublk_copy_pinned(req, io->sel_buf.kaddr,
+						rq_bytes, ITER_DEST);
 
-		import_ubuf(dir, u64_to_user_ptr(ublk_io_buf_addr(ubq, io)),
-			    rq_bytes, &iter);
-		return ublk_copy_user_pages(req, 0, &iter, dir);
+		{
+			struct iov_iter iter;
+			const int dir = ITER_DEST;
+
+			import_ubuf(dir,
+				    u64_to_user_ptr(ublk_io_buf_addr(ubq, io)),
+				    rq_bytes, &iter);
+			return ublk_copy_user_pages(req, 0, &iter, dir);
+		}
 	}
 	return rq_bytes;
 }
@@ -1525,14 +1563,22 @@ static unsigned int ublk_unmap_io(const struct ublk_queue *ubq,
 		return rq_bytes;
 
 	if (ublk_need_unmap_req(req)) {
-		struct iov_iter iter;
-		const int dir = ITER_SOURCE;
-
 		WARN_ON_ONCE(io->res > rq_bytes);
 
-		import_ubuf(dir, u64_to_user_ptr(ublk_io_buf_addr(ubq, io)),
-			    io->res, &iter);
-		return ublk_copy_user_pages(req, 0, &iter, dir);
+		/* pinned: memcpy via kaddr, no page table walk */
+		if (ublk_support_pinned_bufs(ubq) && io->sel_buf.kaddr)
+			return ublk_copy_pinned(req, io->sel_buf.kaddr,
+						io->res, ITER_SOURCE);
+
+		{
+			struct iov_iter iter;
+			const int dir = ITER_SOURCE;
+
+			import_ubuf(dir,
+				    u64_to_user_ptr(ublk_io_buf_addr(ubq, io)),
+				    io->res, &iter);
+			return ublk_copy_user_pages(req, 0, &iter, dir);
+		}
 	}
 	return rq_bytes;
 }
