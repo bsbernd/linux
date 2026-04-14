@@ -332,6 +332,9 @@ struct ublk_queue {
 	unsigned int		nr_buf_pools;
 	struct ublk_buf_pool	*buf_pools[UBLK_MAX_BUF_POOLS];
 
+	/* requests waiting for a buffer pool buffer (UBLK_F_BUF_RINGS) */
+	struct list_head	buf_pending;
+
 	struct ublk_io ios[] __counted_by(q_depth);
 };
 
@@ -510,11 +513,21 @@ static int ublk_select_buf(struct ublk_queue *ubq, struct ublk_io *io,
 	return -ENOBUFS;
 }
 
+static void ublk_dispatch_req_buf(struct ublk_queue *ubq,
+				  struct request *req,
+				  struct ublk_io *io,
+				  unsigned int issue_flags);
+
 /*
  * Return a buffer to its owning pool after commit.
  * No locking needed -- single queue context.
+ *
+ * If there are pending requests waiting for a buffer, dequeue the
+ * first one and directly re-dispatch it (buffer select + start_io +
+ * complete to userspace). This avoids going back through blk-mq
+ * requeue which has uncontrolled retry timing.
  */
-static void ublk_recycle_buf(struct ublk_io *io)
+static void ublk_recycle_buf(struct ublk_queue *ubq, struct ublk_io *io)
 {
 	struct ublk_buf_pool *pool = io->sel_buf.pool;
 
@@ -524,6 +537,20 @@ static void ublk_recycle_buf(struct ublk_io *io)
 	pool->bufs[pool->tail % pool->nbufs] = io->sel_buf;
 	pool->tail++;
 	io->sel_buf.pool = NULL;
+
+	/* retry pending requests that were waiting for buffers */
+	if (!list_empty(&ubq->buf_pending)) {
+		unsigned int issue_flags =
+			IO_URING_CMD_TASK_WORK_ISSUE_FLAGS;
+		struct request *pending;
+		struct ublk_io *pio;
+
+		pending = list_first_entry(&ubq->buf_pending,
+					   struct request, queuelist);
+		list_del_init(&pending->queuelist);
+		pio = &ubq->ios[pending->tag];
+		ublk_dispatch_req_buf(ubq, pending, pio, issue_flags);
+	}
 }
 
 static inline bool ublk_support_auto_buf_reg(const struct ublk_queue *ubq)
@@ -1724,7 +1751,7 @@ static inline void __ublk_complete_rq(struct request *req, struct ublk_io *io,
 
 	/* recycle buffer pool buffer before ending request */
 	if (io->sel_buf.pool)
-		ublk_recycle_buf(io);
+		ublk_recycle_buf(req->mq_hctx->driver_data, io);
 
 	/*
 	 * Run bio->bi_end_io() with softirqs disabled. If the final fput
@@ -1753,7 +1780,7 @@ static inline void __ublk_complete_rq(struct request *req, struct ublk_io *io,
 	return;
 exit:
 	if (io->sel_buf.pool)
-		ublk_recycle_buf(io);
+		ublk_recycle_buf(req->mq_hctx->driver_data, io);
 	ublk_end_request(req, res);
 }
 
@@ -1944,14 +1971,24 @@ static void ublk_dispatch_req(struct ublk_queue *ubq, struct request *req)
 		return;
 	}
 
+	ublk_dispatch_req_buf(ubq, req, io, issue_flags);
+}
+
+/*
+ * Dispatch a request that needs buffer selection and IO start.
+ * Called from ublk_dispatch_req and from recycle retry path.
+ */
+static void ublk_dispatch_req_buf(struct ublk_queue *ubq,
+				  struct request *req,
+				  struct ublk_io *io,
+				  unsigned int issue_flags)
+{
 	/* BUF_RINGS: select buffer and set iod->addr before copy */
 	if (ublk_support_buf_rings(ubq) && ublk_rq_has_data(req)) {
 		struct ublksrv_io_desc *iod = ublk_get_iod(ubq, req->tag);
-		int ret;
 
-		ret = ublk_select_buf(ubq, io, blk_rq_bytes(req));
-		if (ret) {
-			blk_mq_requeue_request(req, true);
+		if (ublk_select_buf(ubq, io, blk_rq_bytes(req))) {
+			list_add_tail(&req->queuelist, &ubq->buf_pending);
 			return;
 		}
 		iod->addr = io->sel_buf.user_addr;
@@ -1959,7 +1996,7 @@ static void ublk_dispatch_req(struct ublk_queue *ubq, struct request *req)
 
 	if (!ublk_start_io(ubq, req, io)) {
 		if (io->sel_buf.pool)
-			ublk_recycle_buf(io);
+			ublk_recycle_buf(ubq, io);
 		return;
 	}
 
@@ -1992,7 +2029,7 @@ static bool __ublk_batch_prep_dispatch(struct ublk_queue *ubq,
 
 	if (!ublk_start_io(ubq, req, io)) {
 		if (io->sel_buf.pool)
-			ublk_recycle_buf(io);
+			ublk_recycle_buf(ubq, io);
 		return false;
 	}
 
@@ -4571,6 +4608,8 @@ static int ublk_init_queue(struct ublk_device *ub, int q_id)
 
 	for (i = 0; i < ubq->q_depth; i++)
 		spin_lock_init(&ubq->ios[i].lock);
+
+	INIT_LIST_HEAD(&ubq->buf_pending);
 
 	if (ublk_dev_support_batch_io(ub)) {
 		ret = ublk_io_evts_init(ubq, ubq->q_depth, numa_node);
