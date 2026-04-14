@@ -1474,6 +1474,15 @@ static inline bool ublk_need_map_req(const struct request *req)
 	return ublk_rq_has_data(req) && req_op(req) == REQ_OP_WRITE;
 }
 
+/* Get the effective userspace buffer address for copy operations */
+static inline __u64 ublk_io_buf_addr(const struct ublk_queue *ubq,
+				      const struct ublk_io *io)
+{
+	if (ublk_support_buf_rings(ubq))
+		return io->sel_buf.user_addr;
+	return io->buf.addr;
+}
+
 static inline bool ublk_need_unmap_req(const struct request *req)
 {
 	return ublk_rq_has_data(req) &&
@@ -1498,13 +1507,15 @@ static unsigned int ublk_map_io(const struct ublk_queue *ubq,
 		struct iov_iter iter;
 		const int dir = ITER_DEST;
 
-		import_ubuf(dir, u64_to_user_ptr(io->buf.addr), rq_bytes, &iter);
+		import_ubuf(dir, u64_to_user_ptr(ublk_io_buf_addr(ubq, io)),
+			    rq_bytes, &iter);
 		return ublk_copy_user_pages(req, 0, &iter, dir);
 	}
 	return rq_bytes;
 }
 
-static unsigned int ublk_unmap_io(bool need_map,
+static unsigned int ublk_unmap_io(const struct ublk_queue *ubq,
+		bool need_map,
 		const struct request *req,
 		const struct ublk_io *io)
 {
@@ -1519,7 +1530,8 @@ static unsigned int ublk_unmap_io(bool need_map,
 
 		WARN_ON_ONCE(io->res > rq_bytes);
 
-		import_ubuf(dir, u64_to_user_ptr(io->buf.addr), io->res, &iter);
+		import_ubuf(dir, u64_to_user_ptr(ublk_io_buf_addr(ubq, io)),
+			    io->res, &iter);
 		return ublk_copy_user_pages(req, 0, &iter, dir);
 	}
 	return rq_bytes;
@@ -1601,7 +1613,9 @@ static blk_status_t ublk_setup_iod(struct ublk_queue *ubq, struct request *req)
 		}
 	}
 
-	iod->addr = io->buf.addr;
+	/* BUF_RINGS: addr is set at dispatch after buffer selection */
+	if (!ublk_support_buf_rings(ubq))
+		iod->addr = io->buf.addr;
 
 	return BLK_STS_OK;
 }
@@ -1651,7 +1665,8 @@ static inline void __ublk_complete_rq(struct request *req, struct ublk_io *io,
 		goto exit;
 
 	/* for READ request, writing data in iod->addr to rq buffers */
-	unmapped_bytes = ublk_unmap_io(need_map, req, io);
+	unmapped_bytes = ublk_unmap_io(req->mq_hctx->driver_data,
+				       need_map, req, io);
 
 	/*
 	 * Extremely impossible since we got data filled in just before
@@ -1660,6 +1675,10 @@ static inline void __ublk_complete_rq(struct request *req, struct ublk_io *io,
 	 */
 	if (unlikely(unmapped_bytes < io->res))
 		io->res = unmapped_bytes;
+
+	/* recycle buffer pool buffer before ending request */
+	if (io->sel_buf.pool)
+		ublk_recycle_buf(io);
 
 	/*
 	 * Run bio->bi_end_io() with softirqs disabled. If the final fput
@@ -1687,6 +1706,8 @@ static inline void __ublk_complete_rq(struct request *req, struct ublk_io *io,
 
 	return;
 exit:
+	if (io->sel_buf.pool)
+		ublk_recycle_buf(io);
 	ublk_end_request(req, res);
 }
 
@@ -1877,8 +1898,24 @@ static void ublk_dispatch_req(struct ublk_queue *ubq, struct request *req)
 		return;
 	}
 
-	if (!ublk_start_io(ubq, req, io))
+	/* BUF_RINGS: select buffer and set iod->addr before copy */
+	if (ublk_support_buf_rings(ubq) && ublk_rq_has_data(req)) {
+		struct ublksrv_io_desc *iod = ublk_get_iod(ubq, req->tag);
+		int ret;
+
+		ret = ublk_select_buf(ubq, io, blk_rq_bytes(req));
+		if (ret) {
+			blk_mq_requeue_request(req, true);
+			return;
+		}
+		iod->addr = io->sel_buf.user_addr;
+	}
+
+	if (!ublk_start_io(ubq, req, io)) {
+		if (io->sel_buf.pool)
+			ublk_recycle_buf(io);
 		return;
+	}
 
 	if (ublk_support_auto_buf_reg(ubq) && ublk_rq_has_data(req)) {
 		ublk_auto_buf_dispatch(ubq, req, io, io->cmd, issue_flags);
@@ -1898,8 +1935,20 @@ static bool __ublk_batch_prep_dispatch(struct ublk_queue *ubq,
 	enum auto_buf_reg_res res = AUTO_BUF_REG_FALLBACK;
 	struct io_uring_cmd *cmd = data->cmd;
 
-	if (!ublk_start_io(ubq, req, io))
+	/* BUF_RINGS: select buffer before copy */
+	if (ublk_support_buf_rings(ubq) && ublk_rq_has_data(req)) {
+		struct ublksrv_io_desc *iod = ublk_get_iod(ubq, tag);
+
+		if (ublk_select_buf(ubq, io, blk_rq_bytes(req)))
+			return false;
+		iod->addr = io->sel_buf.user_addr;
+	}
+
+	if (!ublk_start_io(ubq, req, io)) {
+		if (io->sel_buf.pool)
+			ublk_recycle_buf(io);
 		return false;
+	}
 
 	if (ublk_support_auto_buf_reg(ubq) && ublk_rq_has_data(req)) {
 		res = ublk_auto_buf_register(ubq, req, io, cmd,
@@ -3307,12 +3356,17 @@ static int ublk_unregister_io_buf(struct io_uring_cmd *cmd,
 static int ublk_check_fetch_buf(const struct ublk_device *ub, __u64 buf_addr)
 {
 	if (ublk_dev_need_map_io(ub)) {
-		/*
-		 * FETCH_RQ has to provide IO buffer if NEED GET
-		 * DATA is not enabled
-		 */
-		if (!buf_addr && !ublk_dev_need_get_data(ub))
+		/* BUF_RINGS: kernel selects buffers, server must not provide addr */
+		if (ub->dev_info.flags & UBLK_F_BUF_RINGS) {
+			if (buf_addr)
+				return -EINVAL;
+		} else if (!buf_addr && !ublk_dev_need_get_data(ub)) {
+			/*
+			 * FETCH_RQ has to provide IO buffer if NEED GET
+			 * DATA is not enabled
+			 */
 			return -EINVAL;
+		}
 	} else if (buf_addr) {
 		/* User copy requires addr to be unset */
 		return -EINVAL;
