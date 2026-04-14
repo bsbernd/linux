@@ -1,0 +1,17 @@
+Bottom: b590688784a1d1e7ea55a19dc5568895e4449215
+Top:    b64ac5fe50ebfcfbe540c50e19b8cb76c935cc82
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-04-14 11:22:28 +0200
+
+fuse: support buffer copying for kernel addresses
+
+This is a preparatory patch needed to support pinned buffers in
+fuse-over-io-uring. For pinned buffers, we get the vmapped address of
+the buffer, which we can directly use with memcpy.
+
+Currently, buffer copying in fuse only supports extracting underlying
+pages from an iov iter and kmapping them. This commit allows buffer
+copying to work directly on a kaddr.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Bernd Schubert <bernd@bsbernd.com>

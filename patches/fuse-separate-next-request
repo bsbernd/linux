@@ -1,0 +1,16 @@
+Bottom: c45790a28f99dbbb0c54797bcbcf04ec203b3633
+Top:    033dc7b24258bbc2db0bdcd45f6b1da250be78d7
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-04-14 11:22:27 +0200
+
+fuse: separate next request fetching from sending logic
+
+Simplify the logic for fetching + sending off the next request.
+
+This gets rid of fuse_uring_send_next_to_ring() which contained
+duplicated logic from fuse_uring_send(). This decouples request fetching
+from the send operation, which makes the control flow clearer and
+reduces unnecessary parameter passing.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Bernd Schubert <bschubert@ddn.com>

@@ -1,0 +1,16 @@
+Bottom: f84e821a44f90b1d326db838e38b7e185e1b892b
+Top:    6944bb8d9d23e62e34febf6fdae329e36a38e5cf
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-04-14 11:22:28 +0200
+
+fuse: move fuse_uring_abort() from header to dev_uring.c
+
+Move fuse_uring_abort() out of the inline header definition and into
+dev_uring.c. This function calls several internal helpers (abort
+requests, stop queues) that are all defined in dev_uring.c so inlining
+it in the header unnecessarily exposes implementation details.
+
+This will make the subsequent commit that adds pinning capabilties for
+fuse buffers cleaner.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

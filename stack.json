@@ -1,9 +1,83 @@
 {
   "version": 5,
-  "prev": null,
+  "prev": "8ea55e814295edfc924e7c3f3e9aa135f051f621",
   "head": "142c393abe15fd18392f6094c471673c24e5a66b",
-  "applied": [],
+  "applied": [
+    "io_uring-rsrc-rename",
+    "io_uring-rsrc-split",
+    "io_uring-rsrc-add",
+    "io_uring-rsrc-rename-and",
+    "fuse-separate-next-request",
+    "fuse-refactor-io-uring-header",
+    "fuse-refactor-io-uring-header-1",
+    "fuse-use-enum-types-for-header",
+    "fuse-refactor-setting-up-copy",
+    "fuse-support-buffer-copying",
+    "fuse-use-named-constants-for",
+    "fuse-move-fuse_uring_abort",
+    "fuse-rearrange-io-uring-iovec",
+    "fuse-add-io-uring-buffer-rings",
+    "fuse-add-pinned-headers",
+    "fuse-add-pinned-payload",
+    "fuse-add-zero-copy-over-io",
+    "docs-fuse-add-io-uring-bufring"
+  ],
   "unapplied": [],
   "hidden": [],
-  "patches": {}
+  "patches": {
+    "docs-fuse-add-io-uring-bufring": {
+      "oid": "142c393abe15fd18392f6094c471673c24e5a66b"
+    },
+    "fuse-add-io-uring-buffer-rings": {
+      "oid": "aa741c4a35f05b6d29fe367fff83d647fba2b385"
+    },
+    "fuse-add-pinned-headers": {
+      "oid": "caf8461f10babbcccbf2344eeb1cc381f61afc7c"
+    },
+    "fuse-add-pinned-payload": {
+      "oid": "44d6d8fbdf88b48190b2a36c52618e4690b6dc5e"
+    },
+    "fuse-add-zero-copy-over-io": {
+      "oid": "439f4c182a9b65adf01e57acdc003a6462310336"
+    },
+    "fuse-move-fuse_uring_abort": {
+      "oid": "7ee697ac80f974a02f7862a9a5406bd575701e5a"
+    },
+    "fuse-rearrange-io-uring-iovec": {
+      "oid": "e11084d21b439a93107dd8c57c7952dc6e5a5167"
+    },
+    "fuse-refactor-io-uring-header": {
+      "oid": "31481f83a7d6836106d65c21894ca7f06d945d08"
+    },
+    "fuse-refactor-io-uring-header-1": {
+      "oid": "07ac3ce06f99ff373c1ea11bcadf6bce5a3eba23"
+    },
+    "fuse-refactor-setting-up-copy": {
+      "oid": "1fac1f191b43d62b77fdfedfbdee0bd3bddfa5d0"
+    },
+    "fuse-separate-next-request": {
+      "oid": "7eeb225b4913a118dbaa6f68ab0acb97d44ea433"
+    },
+    "fuse-support-buffer-copying": {
+      "oid": "efdd3c4357c22cc3cc28658a9ec301051d95500c"
+    },
+    "fuse-use-enum-types-for-header": {
+      "oid": "b24b283c631a459be09dbff13d890da36d4b318c"
+    },
+    "fuse-use-named-constants-for": {
+      "oid": "ec6a22671214284d397beea65c35e87c89c560f8"
+    },
+    "io_uring-rsrc-add": {
+      "oid": "4c5ae1e46c15ce6b7fbe2420c84675467811cdba"
+    },
+    "io_uring-rsrc-rename": {
+      "oid": "6cb4c1066edf449ba60c4dc32724d25eefbca943"
+    },
+    "io_uring-rsrc-rename-and": {
+      "oid": "a296a717129b904a3ee842372d79ed615c5e7260"
+    },
+    "io_uring-rsrc-split": {
+      "oid": "a05aadc52d14a1bad308a1f0f9c8ad7377e01fb7"
+    }
+  }
 }

@@ -1,0 +1,13 @@
+Bottom: b7ca412522431aa256bb992ef061a70fc5bc8a87
+Top:    f04c108bc35377b8c7a7ca2a181b769122cdc8d5
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-04-14 11:22:27 +0200
+
+fuse: refactor io-uring header copying from ring
+
+Move header copying from ring logic into a new copy_header_from_ring()
+function. This makes the copy_from_user() logic more clear and
+centralizes error handling / rate-limited logging.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Bernd Schubert <bschubert@ddn.com>

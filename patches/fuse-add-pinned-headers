@@ -1,0 +1,20 @@
+Bottom: 610c952262d11db4a441de3a597eca86f06bf6f1
+Top:    b79cfb0370a7400a167cc8f56f9dc4d3ad09677e
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-04-14 11:22:29 +0200
+
+fuse: add pinned headers capability for io-uring buffer rings
+
+Allow fuse servers to pin their header buffers by setting the
+FUSE_URING_PINNED_HEADERS flag alongside FUSE_URING_BUFRING on REGISTER
+sqes. When set, the kernel pins the header pages, vmaps them for a
+kernel virtual address, and uses direct memcpy for copying. This avoids
+the per-request overhead of having to pin/unpin user pages and translate
+virtual addresses.
+
+Buffers must be page-aligned. The kernel accounts pinned pages against
+RLIMIT_MEMLOCK (bypassed with CAP_IPC_LOCK) and tracks mm->pinned_vm.
+Unpinning is done in process context during connection abort, since vmap
+cannot run in softirq (where final destruction occurs via RCU).
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

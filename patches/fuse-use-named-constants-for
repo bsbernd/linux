@@ -1,0 +1,13 @@
+Bottom: b64ac5fe50ebfcfbe540c50e19b8cb76c935cc82
+Top:    f84e821a44f90b1d326db838e38b7e185e1b892b
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-04-14 11:22:28 +0200
+
+fuse: use named constants for io-uring iovec indices
+
+Replace magic indices 0 and 1 for the iovec array with named constants
+FUSE_URING_IOV_HEADERS and FUSE_URING_IOV_PAYLOAD. This makes the usages
+self-documenting and prepares for buffer ring support which will also
+reference these iovec slots by index.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

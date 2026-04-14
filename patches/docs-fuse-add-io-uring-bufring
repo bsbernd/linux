@@ -1,0 +1,11 @@
+Bottom: 110003c65e42462acdffbf0204f7d176f8c245f5
+Top:    0513cacf8c6ea5c1582e4edd960331e16b27020c
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-04-14 11:22:29 +0200
+
+docs: fuse: add io-uring bufring and zero-copy documentation
+
+Add documentation for fuse over io-uring usage of buffer rings and
+zero-copy.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

@@ -1,0 +1,12 @@
+Bottom: 72c68aa4f263b810599024e1aaddd87785dd6bf9
+Top:    b590688784a1d1e7ea55a19dc5568895e4449215
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-04-14 11:22:28 +0200
+
+fuse: refactor setting up copy state for payload copying
+
+Add a new helper function setup_fuse_copy_state() to contain the logic
+for setting up the copy state for payload copying.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Bernd Schubert <bschubert@ddn.com>

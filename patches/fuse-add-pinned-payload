@@ -1,0 +1,29 @@
+Bottom: b79cfb0370a7400a167cc8f56f9dc4d3ad09677e
+Top:    76b97a4f24701f41dd871612e09dc49c12debffa
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-04-14 11:22:29 +0200
+
+fuse: add pinned payload buffers capability for io-uring buffer rings
+
+Extend the buffer ring pinning capability to payload buffers via the
+FUSE_URING_PINNED_BUFFERS flag. When set alongside FUSE_URING_BUFRING,
+the kernel pins and vmaps the payload buffer region during queue setup.
+
+With pinned payloads, the kernel uses direct memcpy for all payload
+buffer copies, avoiding the per-request overhead of pinning/unpinning
+user pages and translating virtual addresses. This is particularly
+beneficial for large payload copies.
+
+As with pinned headers, buffers must be page-aligned. Pinned pages are
+accounted against RLIMIT_MEMLOCK (bypassed with CAP_IPC_LOCK) and
+unpinned in process context during connection abort.
+
+In benchmarks using passthrough_hp on a high-performance NVMe-backed
+system, pinned headers and pinned payload buffers showed around a 10%
+throughput improvement for direct randreads (~2150 MiB/s to ~2400
+MiB/s), a 4% improvement for direct sequential reads (~2510 MiB/s to
+~2620 MiB/s), a 8% improvement for buffered randreads (~2100 MiB/s to
+~2280 MiB/s), and a 6% improvement for buffered sequential reads (~2500
+MiB/s to ~2670 MiB/s).
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

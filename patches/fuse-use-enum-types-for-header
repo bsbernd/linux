@@ -1,0 +1,13 @@
+Bottom: f04c108bc35377b8c7a7ca2a181b769122cdc8d5
+Top:    72c68aa4f263b810599024e1aaddd87785dd6bf9
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-04-14 11:22:27 +0200
+
+fuse: use enum types for header copying
+
+Use enum types to identify which part of the header needs to be copied.
+This improves the interface and will simplify both kernel-space and
+user-space header addresses copying when buffer rings are added.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
+Reviewed-by: Bernd Schubert <bschubert@ddn.com>

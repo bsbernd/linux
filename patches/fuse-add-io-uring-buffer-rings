@@ -1,0 +1,106 @@
+Bottom: 0b8b66cd25a30d48c3e910831da835d55b590a88
+Top:    610c952262d11db4a441de3a597eca86f06bf6f1
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-04-14 11:22:29 +0200
+
+fuse: add io-uring buffer rings
+
+Add fuse buffer rings for servers communicating through the io-uring
+interface. To use this, the server must set the FUSE_URING_BUFRING
+flag and provide header and payload buffers via an iovec array in the
+sqe during registration. The payload buffers are used to back the buffer
+ring. The kernel manages buffer selection and recycling through a simple
+internal ring.
+
+This has the following advantages over the non-bufring (iovec) path:
+- Reduced memory usage: in the iovec path, each entry has its own
+  dedicated payload buffer, requiring N buffers for N entries where each
+  buffer must be large enough to accommodate the maximum possible
+  payload size. With buffer rings, payload buffers are pooled and
+  selected on demand. Entries only hold a buffer while actively
+  processing a request with payload data. When incremental buffer
+  consumption is added, this will allow non-overlapping regions of a
+  single buffer to be used simultaneously across multiple requests,
+  further reducing memory requirements.
+- Foundation for pinned buffers: the buffer ring headers and payloads
+  are now each passed in as a contiguous memory allocation, which allows
+  fuse to easily pin and vmap the entire region in one operation during
+  queue setup. This will eliminate the per-request overhead of having to
+  pin/unpin user pages and translate virtual addresses and is a
+  prerequisite for future optimizations like performing data copies
+  outside of the server's task context.
+
+Each ring entry gets a fixed ID (sqe->buf_index) that maps to a specific
+header slot in the headers buffer. Payload buffers are selected from
+the ring on demand and recycled after each request. Buffer ring usage is
+set on a per-queue basis. All subsequent registration SQEs for the same
+queue must use consistent flags.
+
+The headers are laid out contiguously and provided via iov[0]. Each slot
+maps to ent->id:
+
+|<- headers_size (>= queue_depth * sizeof(fuse_uring_req_header)) ->|
++------------------------------+------------------------------+-----+
+| struct fuse_uring_req_header | struct fuse_uring_req_header | ... |
+|        [ent id=0]            |        [ent id=1]            |     |
++------------------------------+------------------------------+-----+
+
+On the server side, the ent id is used to determine where in the headers
+buffer the headers data for the ent resides. This is done by
+calculating ent_id * sizeof(struct fuse_uring_req_header) as the offset
+into the headers buffer.
+
+The buffer ring is backed by the payload buffer, which is contiguous but
+partitioned into individual bufs according to the buf_size passed in at
+registration.
+
+  PAYLOAD BUFFER POOL (contiguous, provided via iov[1]):
+    |<-------------- payload_size ------------>|
+    +--------- --+-----------+-----------+-----+
+    |  buf [0]   |  buf [1]  |  buf [2]  | ... |
+    |  buf_size  |  buf_size |  buf_size | ... |
+    +--------- --+-----------+-----------+-----+
+
+buffer ring state (struct fuse_bufring, kernel-internal):
+bufs[]: [ used | used | FREE | FREE | FREE ]
+			^^^^^^^^^^^^^^^^^^^
+			available for selection
+
+The buffer ring logic is as follows:
+select:  buf = bufs[head % nbufs]; head++
+recycle: bufs[tail % nbufs] = buf; tail++
+empty:   tail == head (no buffers available)
+full:    tail - head >= nbufs
+
+Buffer ring request flow
+------------------------
+|  Kernel                                  |  FUSE daemon
+|                                          |
+|  [client request arrives]                |
+|  >fuse_uring_send()                      |
+|    [select payload buf from ring]        |
+|    >fuse_uring_select_buffer()           |
+|    [copy headers to ent's header slot]   |
+|    >copy_header_to_ring()                |
+|    [copy payload to selected buf]        |
+|    >fuse_uring_copy_to_ring()            |
+|    [set buf_id in ent_in_out header]     |
+|    >io_uring_cmd_done()                  |
+|                                          |  [CQE received]
+|                                          |  [read headers from header
+|                                          |    slot]
+|                                          |  [read payload from buf_id]
+|                                          |  [process request]
+|                                          |  [write reply to header
+|                                          |    slot]
+|                                          |  [write reply payload to
+|                                          |    buf]
+|                                          |  >io_uring_submit()
+|                                          |   COMMIT_AND_FETCH
+|  >fuse_uring_commit_fetch()              |
+|    >fuse_uring_commit()                  |
+|     [copy reply from ring]               |
+|     >fuse_uring_recycle_buffer()         |
+|    >fuse_uring_get_next_fuse_req()       |
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

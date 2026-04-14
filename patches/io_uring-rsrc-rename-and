@@ -1,0 +1,14 @@
+Bottom: f14ff43865f120a7cf4a90e19da0e3fe673b219c
+Top:    c45790a28f99dbbb0c54797bcbcf04ec203b3633
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-04-14 11:21:49 +0200
+
+io_uring/rsrc: rename and export IO_IMU_DEST / IO_IMU_SOURCE
+
+Rename IO_IMU_DEST and IO_IMU_SOURCE to IO_BUF_DEST and IO_BUF_SOURCE
+and export it so subsystems may use it.
+
+This is needed by the io_buffer_register_bvec() path for callers who may
+need the buffer to be both readable and writable.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>

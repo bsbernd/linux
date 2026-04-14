@@ -1,0 +1,15 @@
+Bottom: 6944bb8d9d23e62e34febf6fdae329e36a38e5cf
+Top:    0b8b66cd25a30d48c3e910831da835d55b590a88
+Author: Joanne Koong <joannelkoong@gmail.com>
+Date:   2026-04-14 11:22:28 +0200
+
+fuse: rearrange io-uring iovec and ent allocation logic
+
+Move fuse_uring_get_iovec_from_sqe() to earlier in the file and
+move the allocation logic in fuse_uring_create_ring_ent() to the
+beginning of the function.
+
+There is no change in logic, this is done to make the subsequent commit
+that adds buffer rings easier to review.
+
+Signed-off-by: Joanne Koong <joannelkoong@gmail.com>
