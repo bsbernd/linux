@@ -484,6 +484,48 @@ static inline bool ublk_support_pinned_bufs(const struct ublk_queue *ubq)
 	return ubq->flags & UBLK_F_PINNED_BUFS;
 }
 
+/*
+ * Select the smallest buffer that fits rq_bytes from the queue's pools.
+ * Returns 0 on success (io->sel_buf populated), -ENOBUFS if exhausted.
+ * No locking needed -- single queue context.
+ */
+static int ublk_select_buf(struct ublk_queue *ubq, struct ublk_io *io,
+			    unsigned int rq_bytes)
+{
+	unsigned int i;
+
+	for (i = 0; i < ubq->nr_buf_pools; i++) {
+		struct ublk_buf_pool *pool = ubq->buf_pools[i];
+
+		if (pool->buf_size < rq_bytes)
+			continue;
+		if (pool->head == pool->tail)
+			continue;
+
+		io->sel_buf = pool->bufs[pool->head % pool->nbufs];
+		pool->head++;
+		return 0;
+	}
+
+	return -ENOBUFS;
+}
+
+/*
+ * Return a buffer to its owning pool after commit.
+ * No locking needed -- single queue context.
+ */
+static void ublk_recycle_buf(struct ublk_io *io)
+{
+	struct ublk_buf_pool *pool = io->sel_buf.pool;
+
+	if (!pool)
+		return;
+
+	pool->bufs[pool->tail % pool->nbufs] = io->sel_buf;
+	pool->tail++;
+	io->sel_buf.pool = NULL;
+}
+
 static inline bool ublk_support_auto_buf_reg(const struct ublk_queue *ubq)
 {
 	return ubq->flags & UBLK_F_AUTO_BUF_REG;
