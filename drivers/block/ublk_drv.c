@@ -68,6 +68,7 @@
 
 #define UBLK_IO_REGISTER_IO_BUF		_IOC_NR(UBLK_U_IO_REGISTER_IO_BUF)
 #define UBLK_IO_UNREGISTER_IO_BUF	_IOC_NR(UBLK_U_IO_UNREGISTER_IO_BUF)
+#define UBLK_IO_ADD_BUF_POOL		_IOC_NR(UBLK_U_IO_ADD_BUF_POOL)
 
 /* All UBLK_F_* have to be included into UBLK_F_ALL */
 #define UBLK_F_ALL (UBLK_F_SUPPORT_ZERO_COPY \
@@ -89,7 +90,9 @@
 		| UBLK_F_SAFE_STOP_DEV \
 		| UBLK_F_BATCH_IO \
 		| UBLK_F_NO_AUTO_PART_SCAN \
-		| UBLK_F_SHMEM_ZC)
+		| UBLK_F_SHMEM_ZC \
+		| UBLK_F_BUF_RINGS \
+		| UBLK_F_PINNED_BUFS)
 
 #define UBLK_F_ALL_RECOVERY_FLAGS (UBLK_F_USER_RECOVERY \
 		| UBLK_F_USER_RECOVERY_REISSUE \
@@ -4724,6 +4727,20 @@ static int ublk_ctrl_add_dev(const struct ublksrv_ctrl_cmd *header)
 	/* So far, UBLK_F_PER_IO_DAEMON won't be exposed for BATCH_IO */
 	if (ublk_dev_support_batch_io(ub))
 		ub->dev_info.flags &= ~UBLK_F_PER_IO_DAEMON;
+
+	/* PINNED_BUFS requires BUF_RINGS */
+	if ((ub->dev_info.flags & UBLK_F_PINNED_BUFS) &&
+	    !(ub->dev_info.flags & UBLK_F_BUF_RINGS)) {
+		ret = -EINVAL;
+		goto out_free_dev_number;
+	}
+
+	/* BUF_RINGS is mutually exclusive with NEED_GET_DATA */
+	if ((ub->dev_info.flags & UBLK_F_BUF_RINGS) &&
+	    (ub->dev_info.flags & UBLK_F_NEED_GET_DATA)) {
+		ret = -EINVAL;
+		goto out_free_dev_number;
+	}
 
 	/* GET_DATA isn't needed any more with USER_COPY or ZERO COPY */
 	if (ub->dev_info.flags & (UBLK_F_USER_COPY | UBLK_F_SUPPORT_ZERO_COPY |
