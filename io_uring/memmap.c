@@ -37,6 +37,7 @@ static bool io_mem_alloc_compound(struct page **pages, int nr_pages,
 	return true;
 }
 
+/* XXX: Move to mm/ ? */
 struct page **io_pin_pages(unsigned long uaddr, unsigned long len, int *npages)
 {
 	unsigned long start, end, nr_pages;
@@ -78,6 +79,7 @@ struct page **io_pin_pages(unsigned long uaddr, unsigned long len, int *npages)
 	kvfree(pages);
 	return ERR_PTR(ret);
 }
+EXPORT_SYMBOL_GPL(io_pin_pages);
 
 enum {
 	/* memory was vmap'ed for the kernel, freeing the region vunmap's it */

@@ -167,6 +167,20 @@ struct ublk_shmem_buf_reg {
 #define	UBLK_U_IO_FETCH_IO_CMDS 	\
 	_IOWR('u', 0x27, struct ublk_batch_io)
 
+/*
+ * Register a buffer pool for a queue. Sent per-queue on /dev/ublkc*
+ * before the first FETCH_REQ. Multiple pools per queue are allowed
+ * (one per size tier, up to UBLK_MAX_BUF_POOLS). A pool with
+ * buf_size >= max_io_buf_bytes is required.
+ *
+ * The ublksrv_io_cmd.addr field points to a userspace
+ * struct ublk_buf_pool_config describing the pool parameters.
+ *
+ * Requires UBLK_F_BUF_RINGS.
+ */
+#define	UBLK_U_IO_ADD_BUF_POOL		\
+	_IOWR('u', 0x28, struct ublksrv_io_cmd)
+
 /* only ABORT means that no re-fetch */
 #define UBLK_IO_RES_OK			0
 #define UBLK_IO_RES_NEED_GET_DATA	1
@@ -416,6 +430,26 @@ struct ublk_shmem_buf_reg {
  * encodes the buffer index + offset instead of a userspace buffer address.
  */
 #define UBLK_F_SHMEM_ZC	(1ULL << 19)
+
+/*
+ * Enable multi-size buffer pools for copy mode. The server registers
+ * multiple buffer pools per queue (each with a different buffer size)
+ * via UBLK_U_IO_ADD_BUF_POOL before the first FETCH_REQ. At dispatch
+ * the kernel selects the smallest buffer that fits blk_rq_bytes(rq),
+ * eliminating the need for max-sized buffers on every IO tag.
+ *
+ * Mutually exclusive with UBLK_F_NEED_GET_DATA.
+ */
+#define UBLK_F_BUF_RINGS	(1ULL << 20)
+
+/*
+ * Pin and vmap buffer pool memory at registration time. Requires
+ * UBLK_F_BUF_RINGS. When set, the kernel uses memcpy via the kernel
+ * virtual address instead of copy_to_user/copy_from_user, avoiding
+ * per-IO page table walks. Pages are accounted against RLIMIT_MEMLOCK
+ * (bypassable with CAP_IPC_LOCK).
+ */
+#define UBLK_F_PINNED_BUFS	(1ULL << 21)
 
 /* device state */
 #define UBLK_S_DEV_DEAD	0
@@ -682,6 +716,23 @@ struct ublk_batch_io {
 	__u8	elem_bytes;
 	__u8	reserved;
 	__u64   reserved2;
+};
+
+#define UBLK_MAX_BUF_POOLS	8
+
+/*
+ * Payload for UBLK_U_IO_ADD_BUF_POOL.
+ *
+ * Registers a buffer pool for a queue. The server allocates a contiguous
+ * region of nr_bufs (= len / buf_size) buffers and the kernel manages
+ * selection via a head/tail ring.
+ */
+struct ublk_buf_pool_config {
+	__u64	addr;		/* buffer region base (page-aligned) */
+	__u64	len;		/* total size = nr_bufs * buf_size */
+	__u32	buf_size;	/* per-buffer size (page-aligned, > 0) */
+	__u16	q_id;		/* which queue this pool belongs to */
+	__u16	flags;		/* reserved, must be 0 */
 };
 
 struct ublk_param_basic {

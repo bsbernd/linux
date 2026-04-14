@@ -14,6 +14,8 @@ const char *io_uring_get_opcode(u8 opcode);
 bool io_is_uring_fops(struct file *file);
 int __io_uring_fork(struct task_struct *tsk);
 
+struct page **io_pin_pages(unsigned long uaddr, unsigned long len, int *npages);
+
 static inline void io_uring_files_cancel(void)
 {
 	if (current->io_uring)
