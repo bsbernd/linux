@@ -173,10 +173,13 @@ struct ublk_shmem_buf_reg {
  * (one per size tier, up to UBLK_MAX_BUF_POOLS). A pool with
  * buf_size >= max_io_buf_bytes is required.
  *
+ * The ublksrv_io_cmd.addr field points to a userspace
+ * struct ublk_buf_pool_config describing the pool parameters.
+ *
  * Requires UBLK_F_BUF_RINGS.
  */
 #define	UBLK_U_IO_ADD_BUF_POOL		\
-	_IOWR('u', 0x28, struct ublk_buf_pool_config)
+	_IOWR('u', 0x28, struct ublksrv_io_cmd)
 
 /* only ABORT means that no re-fetch */
 #define UBLK_IO_RES_OK			0

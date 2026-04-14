@@ -41,6 +41,7 @@
 #include <linux/delay.h>
 #include <linux/mm.h>
 #include <asm/page.h>
+#include <linux/vmalloc.h>
 #include <linux/task_work.h>
 #include <linux/namei.h>
 #include <linux/kref.h>
@@ -201,13 +202,15 @@ struct ublk_batch_io_data {
 /* used for UBLK_F_BATCH_IO only */
 #define UBLK_BATCH_IO_UNUSED_TAG	((unsigned short)-1)
 
+struct ublk_buf_pool;
+
 /* Buffer pool: a single selected buffer from a pool */
 struct ublk_buf {
 	void		*kaddr;		/* kernel VA (pinned), NULL otherwise */
 	__u64		user_addr;	/* userspace VA (always, for iod->addr) */
 	unsigned int	len;
 	unsigned int	id;		/* unique within this queue's pools */
-	u8		pool_idx;
+	struct ublk_buf_pool *pool;	/* owning pool, for recycling */
 };
 
 /* Buffer pool: manages a set of same-sized buffers for one queue */
@@ -3368,6 +3371,182 @@ static bool ublk_get_data(const struct ublk_queue *ubq, struct ublk_io *io,
 	return ublk_start_io(ubq, req, io);
 }
 
+static int ublk_buf_pool_pin(struct ublk_buf_pool *pool, unsigned long addr,
+			     unsigned int nr_pages)
+{
+	unsigned long page_limit, cur_pages, new_pages;
+	struct user_struct *user = current_user();
+	struct page **pages;
+	int pinned;
+
+	pages = kvmalloc_objs(struct page *, nr_pages, GFP_KERNEL_ACCOUNT);
+	if (!pages)
+		return -ENOMEM;
+
+	pinned = pin_user_pages_fast(addr, nr_pages,
+				     FOLL_WRITE | FOLL_LONGTERM, pages);
+	if (pinned != nr_pages) {
+		if (pinned > 0)
+			unpin_user_pages(pages, pinned);
+		kvfree(pages);
+		return pinned < 0 ? pinned : -EFAULT;
+	}
+
+	/* RLIMIT_MEMLOCK accounting (bypassable with CAP_IPC_LOCK) */
+	if (!capable(CAP_IPC_LOCK)) {
+		page_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
+
+		cur_pages = atomic_long_read(&user->locked_vm);
+		do {
+			new_pages = cur_pages + nr_pages;
+			if (new_pages > page_limit) {
+				unpin_user_pages(pages, nr_pages);
+				kvfree(pages);
+				return -ENOMEM;
+			}
+		} while (!atomic_long_try_cmpxchg(&user->locked_vm,
+						   &cur_pages, new_pages));
+
+		pool->user = get_uid(user);
+	}
+
+	atomic64_add(nr_pages, &current->mm->pinned_vm);
+	mmgrab(current->mm);
+	pool->mm_account = current->mm;
+
+	pool->vmap_addr = vmap(pages, nr_pages, VM_MAP, PAGE_KERNEL);
+	if (!pool->vmap_addr) {
+		if (pool->user) {
+			atomic_long_sub(nr_pages, &pool->user->locked_vm);
+			free_uid(pool->user);
+			pool->user = NULL;
+		}
+		atomic64_sub(nr_pages, &current->mm->pinned_vm);
+		mmdrop(pool->mm_account);
+		pool->mm_account = NULL;
+		unpin_user_pages(pages, nr_pages);
+		kvfree(pages);
+		return -ENOMEM;
+	}
+
+	pool->pages = pages;
+	pool->nr_pages = nr_pages;
+	return 0;
+}
+
+static int ublk_add_buf_pool(struct io_uring_cmd *cmd,
+			     struct ublk_device *ub,
+			     unsigned int issue_flags)
+{
+	/*
+	 * The config is passed via a userspace buffer pointed to by
+	 * ublksrv_io_cmd.addr, since ublk_buf_pool_config is too large
+	 * for the sqe cmd area.
+	 */
+	const struct ublksrv_io_cmd *ub_src =
+		io_uring_sqe_cmd(cmd->sqe, struct ublksrv_io_cmd);
+	u64 cfg_addr = READ_ONCE(ub_src->addr);
+	struct ublk_buf_pool_config cfg;
+	u64 addr, len;
+	u32 buf_size;
+	u16 q_id, flags;
+
+	if (copy_from_user(&cfg, u64_to_user_ptr(cfg_addr), sizeof(cfg)))
+		return -EFAULT;
+
+	addr = cfg.addr;
+	len = cfg.len;
+	buf_size = cfg.buf_size;
+	q_id = cfg.q_id;
+	flags = cfg.flags;
+	struct ublk_queue *ubq;
+	struct ublk_buf_pool *pool;
+	unsigned int nr_bufs, i, insert_pos;
+	bool pinned;
+	int ret;
+
+	if (flags)
+		return -EINVAL;
+
+	if (q_id >= ub->dev_info.nr_hw_queues)
+		return -EINVAL;
+
+	if (!buf_size || !PAGE_ALIGNED(buf_size))
+		return -EINVAL;
+
+	if (!PAGE_ALIGNED(addr))
+		return -EINVAL;
+
+	if (len < buf_size)
+		return -EINVAL;
+
+	nr_bufs = len / buf_size;
+
+	ubq = ublk_get_queue(ub, q_id);
+
+	if (ubq->nr_buf_pools >= UBLK_MAX_BUF_POOLS)
+		return -ENOSPC;
+
+	/* no duplicate buf_size on same queue */
+	for (i = 0; i < ubq->nr_buf_pools; i++) {
+		if (ubq->buf_pools[i]->buf_size == buf_size)
+			return -EEXIST;
+	}
+
+	pinned = ub->dev_info.flags & UBLK_F_PINNED_BUFS;
+
+	pool = kvzalloc(struct_size(pool, bufs, nr_bufs), GFP_KERNEL);
+	if (!pool)
+		return -ENOMEM;
+
+	pool->buf_size = buf_size;
+	pool->nbufs = nr_bufs;
+	pool->pinned = pinned;
+
+	if (pinned) {
+		unsigned int nr_pages = len >> PAGE_SHIFT;
+
+		ret = ublk_buf_pool_pin(pool, addr, nr_pages);
+		if (ret) {
+			kvfree(pool);
+			return ret;
+		}
+	}
+
+	/* populate bufs[] */
+	for (i = 0; i < nr_bufs; i++) {
+		struct ublk_buf *buf = &pool->bufs[i];
+
+		buf->user_addr = addr + (u64)i * buf_size;
+		buf->len = buf_size;
+		buf->id = i;
+		buf->pool = pool;
+		if (pinned)
+			buf->kaddr = pool->vmap_addr + (size_t)i * buf_size;
+	}
+
+	/* all buffers start available: head=0, tail=nr_bufs */
+	pool->tail = nr_bufs;
+
+	/* insert sorted by buf_size */
+	insert_pos = ubq->nr_buf_pools;
+	for (i = 0; i < ubq->nr_buf_pools; i++) {
+		if (ubq->buf_pools[i]->buf_size > buf_size) {
+			insert_pos = i;
+			break;
+		}
+	}
+
+	/* shift pools to make room */
+	for (i = ubq->nr_buf_pools; i > insert_pos; i--)
+		ubq->buf_pools[i] = ubq->buf_pools[i - 1];
+
+	ubq->buf_pools[insert_pos] = pool;
+	ubq->nr_buf_pools++;
+
+	return 0;
+}
+
 static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 		unsigned int issue_flags)
 {
@@ -3402,6 +3581,16 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 	 */
 	if (_IOC_NR(cmd_op) == UBLK_IO_UNREGISTER_IO_BUF)
 		return ublk_unregister_io_buf(cmd, ub, addr, issue_flags);
+
+	/*
+	 * ADD_BUF_POOL uses struct ublk_buf_pool_config (not ublksrv_io_cmd),
+	 * no tag needed, handle before tag validation
+	 */
+	if (_IOC_NR(cmd_op) == UBLK_IO_ADD_BUF_POOL) {
+		if (!(ub->dev_info.flags & UBLK_F_BUF_RINGS))
+			return -EINVAL;
+		return ublk_add_buf_pool(cmd, ub, issue_flags);
+	}
 
 	ret = -EINVAL;
 	if (q_id >= ub->dev_info.nr_hw_queues)
