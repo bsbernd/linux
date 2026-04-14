@@ -4527,6 +4527,43 @@ static const struct file_operations ublk_ch_batch_io_fops = {
 	.mmap = ublk_ch_mmap,
 };
 
+static void ublk_buf_pool_destroy(struct ublk_buf_pool *pool)
+{
+	if (pool->pinned) {
+		vunmap(pool->vmap_addr);
+		unpin_user_pages(pool->pages, pool->nr_pages);
+
+		if (pool->user) {
+			atomic_long_sub(pool->nr_pages, &pool->user->locked_vm);
+			free_uid(pool->user);
+		}
+
+		atomic64_sub(pool->nr_pages, &pool->mm_account->pinned_vm);
+		mmdrop(pool->mm_account);
+
+		kvfree(pool->pages);
+	}
+	kvfree(pool);
+}
+
+static void ublk_destroy_buf_pools(struct ublk_queue *ubq)
+{
+	struct request *req, *tmp;
+	unsigned int i;
+
+	/* fail any requests waiting for buffers */
+	list_for_each_entry_safe(req, tmp, &ubq->buf_pending, queuelist) {
+		list_del_init(&req->queuelist);
+		blk_mq_end_request(req, BLK_STS_IOERR);
+	}
+
+	for (i = 0; i < ubq->nr_buf_pools; i++) {
+		ublk_buf_pool_destroy(ubq->buf_pools[i]);
+		ubq->buf_pools[i] = NULL;
+	}
+	ubq->nr_buf_pools = 0;
+}
+
 static void __ublk_deinit_queue(struct ublk_device *ub, struct ublk_queue *ubq)
 {
 	int size, i;
@@ -4546,6 +4583,8 @@ static void __ublk_deinit_queue(struct ublk_device *ub, struct ublk_queue *ubq)
 
 	if (ublk_dev_support_batch_io(ub))
 		ublk_io_evts_deinit(ubq);
+
+	ublk_destroy_buf_pools(ubq);
 
 	kvfree(ubq);
 }
