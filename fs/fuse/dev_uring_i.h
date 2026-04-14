@@ -8,6 +8,7 @@
 #define _FS_FUSE_DEV_URING_I_H
 
 #include <linux/uio.h>
+#include <linux/io_uring/cmd.h>
 
 #include "fuse_i.h"
 
@@ -51,12 +52,9 @@ struct fuse_ring_ent {
 		struct {
 			struct iov_iter headers_iter;
 			struct io_rsrc_node *headers_node;
-			struct kvec payload_kvec;
-			/*
-			 * This needs to be tracked in order to properly recycle
-			 * the buffer when done with it
-			 */
-			unsigned int ringbuf_buf_id;
+			struct io_ring_buf ring_buf;
+			struct bio_vec *bvec;
+			unsigned int max_bvecs;
 			unsigned int fixed_buf_id;
 
 			/* True if the request's pages are being zero-copied */
