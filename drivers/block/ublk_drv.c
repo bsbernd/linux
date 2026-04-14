@@ -201,6 +201,33 @@ struct ublk_batch_io_data {
 /* used for UBLK_F_BATCH_IO only */
 #define UBLK_BATCH_IO_UNUSED_TAG	((unsigned short)-1)
 
+/* Buffer pool: a single selected buffer from a pool */
+struct ublk_buf {
+	void		*kaddr;		/* kernel VA (pinned), NULL otherwise */
+	__u64		user_addr;	/* userspace VA (always, for iod->addr) */
+	unsigned int	len;
+	unsigned int	id;		/* unique within this queue's pools */
+	u8		pool_idx;
+};
+
+/* Buffer pool: manages a set of same-sized buffers for one queue */
+struct ublk_buf_pool {
+	unsigned int	buf_size;
+	unsigned int	nbufs;
+	unsigned int	head;		/* consume index */
+	unsigned int	tail;		/* produce index */
+	bool		pinned;
+
+	/* pinned only */
+	struct page	**pages;
+	unsigned int	nr_pages;
+	void		*vmap_addr;
+	struct user_struct *user;	/* RLIMIT_MEMLOCK accounting */
+	struct mm_struct *mm_account;	/* for out-of-task teardown */
+
+	struct ublk_buf	bufs[];		/* flex array */
+};
+
 union ublk_io_buf {
 	__u64	addr;
 	struct ublk_auto_buf_reg auto_reg;
@@ -208,6 +235,7 @@ union ublk_io_buf {
 
 struct ublk_io {
 	union ublk_io_buf buf;
+	struct ublk_buf sel_buf;	/* selected from queue's buffer pool */
 	unsigned int flags;
 	int res;
 
@@ -296,6 +324,10 @@ struct ublk_queue {
 		/* Currently active fetch command (NULL = none active) */
 		struct ublk_batch_fetch_cmd  *active_fcmd;
 	}____cacheline_aligned_in_smp;
+
+	/* multi-size buffer pools (UBLK_F_BUF_RINGS), sorted by buf_size */
+	unsigned int		nr_buf_pools;
+	struct ublk_buf_pool	*buf_pools[UBLK_MAX_BUF_POOLS];
 
 	struct ublk_io ios[] __counted_by(q_depth);
 };
@@ -437,6 +469,16 @@ static inline bool ublk_iod_is_shmem_zc(const struct ublk_queue *ubq,
 static inline bool ublk_dev_support_shmem_zc(const struct ublk_device *ub)
 {
 	return ub->dev_info.flags & UBLK_F_SHMEM_ZC;
+}
+
+static inline bool ublk_support_buf_rings(const struct ublk_queue *ubq)
+{
+	return ubq->flags & UBLK_F_BUF_RINGS;
+}
+
+static inline bool ublk_support_pinned_bufs(const struct ublk_queue *ubq)
+{
+	return ubq->flags & UBLK_F_PINNED_BUFS;
 }
 
 static inline bool ublk_support_auto_buf_reg(const struct ublk_queue *ubq)
