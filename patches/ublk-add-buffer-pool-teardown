@@ -1,0 +1,16 @@
+Bottom: a4397fc9fa7d791ab87ff38a2b6719bef25ca45f
+Top:    42d58009ab91d30c10ffdacf637361e05ea16364
+Author: Bernd Schubert <bernd@bsbernd.com>
+Date:   2026-04-14 15:17:56 +0200
+
+ublk: add buffer pool teardown on device stop
+
+Clean up buffer pools when the device queue is deinitialized:
+- Drain the buf_pending list, failing any waiting requests
+- For pinned pools: vunmap, unpin_user_pages, unaccount
+  RLIMIT_MEMLOCK (via stored user/mm_account for out-of-task teardown)
+- kvfree each pool
+
+This follows the same pattern as fuse's fuse_bufring_unpin_mem().
+
+Assisted-by: Claude:claude-opus-4-6

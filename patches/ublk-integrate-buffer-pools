@@ -1,0 +1,26 @@
+Bottom: 9989e50aa64b72fc4ca7f4f7841f72e570c83fed
+Top:    c2b7fa1c94745629ce80052b23972268c21f51e4
+Author: Bernd Schubert <bernd@bsbernd.com>
+Date:   2026-04-14 15:07:38 +0200
+
+ublk: integrate buffer pools into dispatch and commit paths
+
+Wire ublk_select_buf() into ublk_dispatch_req() and batch dispatch
+(__ublk_batch_prep_dispatch) to select a right-sized buffer before
+the IO copy. The selected buffer's user_addr is written to iod->addr
+so the server sees the buffer address as usual.
+
+Wire ublk_recycle_buf() into __ublk_complete_rq() to return buffers
+to their pool after commit. Recycle also happens on dispatch failure
+(ublk_start_io returning false).
+
+Update ublk_map_io/ublk_unmap_io to use the buffer pool's user_addr
+via ublk_io_buf_addr() helper when BUF_RINGS is active.
+
+Update ublk_setup_iod to skip setting iod->addr when BUF_RINGS is
+active (addr is set at dispatch after buffer selection).
+
+Update ublk_check_fetch_buf to allow buf_addr=0 when BUF_RINGS is
+active (kernel selects buffers, server must not provide addr).
+
+Assisted-by: Claude:claude-opus-4-6

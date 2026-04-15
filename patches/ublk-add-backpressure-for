@@ -1,0 +1,20 @@
+Bottom: 5e0ff4086cf89b73412abbd88d8ea40d2ac45840
+Top:    a4397fc9fa7d791ab87ff38a2b6719bef25ca45f
+Author: Bernd Schubert <bernd@bsbernd.com>
+Date:   2026-04-14 15:16:52 +0200
+
+ublk: add backpressure for buffer pool exhaustion
+
+When ublk_select_buf() returns -ENOBUFS (all buffers of suitable size
+exhausted), queue the request on a per-queue buf_pending list instead
+of dispatching it.
+
+When a buffer is recycled via ublk_recycle_buf(), the first pending
+request is dequeued and directly re-dispatched through
+ublk_dispatch_req_buf(). This avoids going through blk-mq requeue
+which has uncontrolled retry timing (either spinning or too slow).
+
+The pending list is per-queue with no cross-queue sharing, matching
+the single-context design of the buffer pools.
+
+Assisted-by: Claude:claude-opus-4-6

@@ -1,0 +1,15 @@
+Bottom: 6756bd387f9ca511621bf5f662d53b5e47cee6c9
+Top:    167ac8ac092e6252c31df74176055085ed3946b5
+Author: Bernd Schubert <bernd@bsbernd.com>
+Date:   2026-04-14 14:35:54 +0200
+
+ublk: add kernel data structures for buffer pools
+
+Add ublk_buf (a single selected buffer), ublk_buf_pool (per-queue pool
+with head/tail ring and optional pinning state), and extend ublk_queue
+with the buf_pools array and ublk_io with sel_buf.
+
+These structures follow the same model as fuse's fuse_bufring: per-queue,
+kernel-managed head/tail, no cross-queue sharing.
+
+Assisted-by: Claude:claude-opus-4-6

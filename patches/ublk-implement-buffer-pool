@@ -1,0 +1,22 @@
+Bottom: 167ac8ac092e6252c31df74176055085ed3946b5
+Top:    a71168c7cf7ac1bc02caaa720c0beea6856cf77d
+Author: Bernd Schubert <bernd@bsbernd.com>
+Date:   2026-04-14 15:01:27 +0200
+
+ublk: implement buffer pool registration (UBLK_U_IO_ADD_BUF_POOL)
+
+Implement the uring_cmd handler for UBLK_U_IO_ADD_BUF_POOL which
+allows the server to register buffer pools per queue before the first
+FETCH_REQ.
+
+The config is passed via a userspace pointer in ublksrv_io_cmd.addr.
+Each pool is validated (page-aligned addr/buf_size, no duplicate sizes,
+< UBLK_MAX_BUF_POOLS per queue) and inserted sorted by buf_size into
+the queue's buf_pools array.
+
+When UBLK_F_PINNED_BUFS is set, the buffer region is pinned via
+pin_user_pages_fast(FOLL_WRITE | FOLL_LONGTERM), accounted against
+RLIMIT_MEMLOCK (bypassable with CAP_IPC_LOCK), and vmapped for kernel
+access. This follows the same pattern as fuse's fuse_bufring_pin_mem().
+
+Assisted-by: Claude:claude-opus-4-6

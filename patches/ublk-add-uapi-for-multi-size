@@ -1,0 +1,20 @@
+Bottom: 0513cacf8c6ea5c1582e4edd960331e16b27020c
+Top:    6756bd387f9ca511621bf5f662d53b5e47cee6c9
+Author: Bernd Schubert <bernd@bsbernd.com>
+Date:   2026-04-14 14:34:38 +0200
+
+ublk: add UAPI for multi-size buffer pools
+
+Add UBLK_F_BUF_RINGS and UBLK_F_PINNED_BUFS device flags,
+UBLK_U_IO_ADD_BUF_POOL uring_cmd, and struct ublk_buf_pool_config
+to support multi-size buffer pools in copy mode.
+
+UBLK_F_BUF_RINGS enables kernel-managed buffer pools where the kernel
+selects right-sized buffers at dispatch time based on blk_rq_bytes(rq).
+UBLK_F_PINNED_BUFS optionally pins and vmaps the buffer memory for
+memcpy-based copies without per-IO page table walks.
+
+UBLK_F_BUF_RINGS is mutually exclusive with UBLK_F_NEED_GET_DATA.
+UBLK_F_PINNED_BUFS requires UBLK_F_BUF_RINGS.
+
+Assisted-by: Claude:claude-opus-4-6

@@ -1,6 +1,6 @@
 {
   "version": 5,
-  "prev": "f1d04d895f8a294a607e47c34ebcec21e5444875",
+  "prev": "6c959e76638945675607421d933e471d51ddf983",
   "head": "b964002c62dd52ff46a5ba5c1127cd8ac8a636fe",
   "applied": [
     "io_uring-rsrc-rename",
@@ -20,7 +20,15 @@
     "fuse-add-pinned-headers",
     "fuse-add-pinned-payload",
     "fuse-add-zero-copy-over-io",
-    "docs-fuse-add-io-uring-bufring"
+    "docs-fuse-add-io-uring-bufring",
+    "ublk-add-uapi-for-multi-size",
+    "ublk-add-kernel-data",
+    "ublk-implement-buffer-pool",
+    "ublk-add-buffer-selection-and",
+    "ublk-integrate-buffer-pools",
+    "ublk-add-pinned-copy-paths-for",
+    "ublk-add-backpressure-for",
+    "ublk-add-buffer-pool-teardown"
   ],
   "unapplied": [],
   "hidden": [],
@@ -78,6 +86,30 @@
     },
     "io_uring-rsrc-split": {
       "oid": "a05aadc52d14a1bad308a1f0f9c8ad7377e01fb7"
+    },
+    "ublk-add-backpressure-for": {
+      "oid": "5e2449bdf463788aee9526c75f324a5c8aa11d3f"
+    },
+    "ublk-add-buffer-pool-teardown": {
+      "oid": "b964002c62dd52ff46a5ba5c1127cd8ac8a636fe"
+    },
+    "ublk-add-buffer-selection-and": {
+      "oid": "6971961bc36f9670a14fe119a21c42913b2dd795"
+    },
+    "ublk-add-kernel-data": {
+      "oid": "2da8c08d98c8c2f41b8dc4655e9768258e951c86"
+    },
+    "ublk-add-pinned-copy-paths-for": {
+      "oid": "df38afb9a9917ffd91739d7a2a55f8dddb58d3d3"
+    },
+    "ublk-add-uapi-for-multi-size": {
+      "oid": "72221bd930907205d99336c5652971228a1d0958"
+    },
+    "ublk-implement-buffer-pool": {
+      "oid": "50149ffae97bea0168fcdcbafa8f3a9ba7a29578"
+    },
+    "ublk-integrate-buffer-pools": {
+      "oid": "c4968130d16ebc360154bea8c68188c4ddb4cd29"
     }
   }
 }

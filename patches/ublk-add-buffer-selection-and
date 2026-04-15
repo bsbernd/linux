@@ -1,0 +1,15 @@
+Bottom: a71168c7cf7ac1bc02caaa720c0beea6856cf77d
+Top:    9989e50aa64b72fc4ca7f4f7841f72e570c83fed
+Author: Bernd Schubert <bernd@bsbernd.com>
+Date:   2026-04-14 15:02:24 +0200
+
+ublk: add buffer selection and recycling for buffer pools
+
+Add ublk_select_buf() which selects the smallest buffer that fits
+blk_rq_bytes(rq) from the queue's sorted pools (ascending buf_size),
+and ublk_recycle_buf() which returns a buffer to its owning pool.
+
+Both operate on the per-queue head/tail ring with no locking needed
+since pools are only accessed from the queue's single context.
+
+Assisted-by: Claude:claude-opus-4-6

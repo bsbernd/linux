@@ -1,0 +1,18 @@
+Bottom: c2b7fa1c94745629ce80052b23972268c21f51e4
+Top:    5e0ff4086cf89b73412abbd88d8ea40d2ac45840
+Author: Bernd Schubert <bernd@bsbernd.com>
+Date:   2026-04-14 15:12:32 +0200
+
+ublk: add pinned copy paths for buffer pools
+
+When UBLK_F_PINNED_BUFS is set and the selected buffer has a kernel
+virtual address (kaddr), use ublk_copy_pinned() which performs direct
+memcpy between request bvec pages and the pinned buffer via
+kmap_local_page + memcpy. This avoids the per-IO page table walk
+that import_ubuf + copy_to_user/copy_from_user incurs.
+
+The pinned path is used in both ublk_map_io (WRITE: bvecs -> kbuf)
+and ublk_unmap_io (READ: kbuf -> bvecs). Non-pinned BUF_RINGS mode
+falls through to the existing import_ubuf path.
+
+Assisted-by: Claude:claude-opus-4-6
