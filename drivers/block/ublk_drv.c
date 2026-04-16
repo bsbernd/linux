@@ -207,7 +207,6 @@ struct ublk_buf_pool;
 
 /* Buffer pool: a single selected buffer from a pool */
 struct ublk_buf {
-	void		*kaddr;		/* kernel VA (pinned), NULL otherwise */
 	__u64		user_addr;	/* userspace VA (always, for iod->addr) */
 	unsigned int	len;
 	unsigned int	id; /* unique within this queue's pools */
@@ -224,9 +223,6 @@ struct ublk_buf_pool {
 	/* pinned only */
 	struct page	**pages;
 	unsigned int	nr_pages;
-	void		*vmap_addr;
-	struct user_struct *user;	/* RLIMIT_MEMLOCK accounting */
-	struct mm_struct *mm_account;	/* for out-of-task teardown */
 
 	struct ublk_buf	bufs[];		/* flex array */
 };
@@ -510,19 +506,31 @@ static int ublk_select_buf(struct ublk_queue *ubq, struct ublk_io *io,
 	unsigned int order = get_order(rq_bytes);
 	struct ublk_buf_pool *pool;
 
-	pr_info("Want order: %u\n", order);
-
-		if (order > ubq->max_buf_order) return -ENOBUFS;
+	if (order > ubq->max_buf_order) {
+		pr_info("%s: order %u > max %u for %u bytes\n",
+			__func__, order, ubq->max_buf_order, rq_bytes);
+		return -EINVAL;
+	}
 
 	pool = ubq->buf_pool_order_map[order];
-	if (!pool || pool->head == pool->tail)
+	if (!pool) {
+		pr_info("%s: no pool for order %u (%u bytes)\n",
+			__func__, order, rq_bytes);
+		return -EINVAL;
+	}
+
+	if (pool->head == pool->tail) {
+		pr_info("%s: pool order %u (buf_size %u) empty, head=tail=%u\n",
+			__func__, order, pool->buf_size, pool->head);
 		return -ENOBUFS;
+	}
 
 	io->sel_buf = pool->bufs[pool->head % pool->nbufs];
+	io->sel_buf_pool = pool;
 	pool->head++;
-
-	pr_info("Got buf %p for order %u ", &io->sel_buf, order);
-
+	pr_info("%s: order %u -> pool buf_size %u, head %u/%u user_addr %llx\n",
+		__func__, order, pool->buf_size, pool->head, pool->nbufs,
+		io->sel_buf.user_addr);
 	return 0;
 }
 
@@ -547,11 +555,12 @@ static void ublk_recycle_buf(struct ublk_queue *ubq, struct ublk_io *io)
 	if (!pool)
 		return;
 
-	pr_info("Reycling buf %p", &io->sel_buf);
-
 	pool->bufs[pool->tail % pool->nbufs] = io->sel_buf;
 	pool->tail++;
 	io->sel_buf_pool = NULL;
+	pr_info("%s: qid %d recycled buf pool buf_size %u, avail %u/%u\n",
+		__func__, ubq->q_id, pool->buf_size,
+		pool->tail - pool->head, pool->nbufs);
 
 	/* retry pending requests that were waiting for buffers */
 	if (!list_empty(&ubq->req_buf_pending)) {
@@ -562,6 +571,8 @@ static void ublk_recycle_buf(struct ublk_queue *ubq, struct ublk_io *io)
 
 		pending = list_first_entry(&ubq->req_buf_pending,
 					   struct request, queuelist);
+		pr_info("%s: qid %d retrying pending tag %d\n",
+			__func__, ubq->q_id, pending->tag);
 		list_del_init(&pending->queuelist);
 		pio = &ubq->ios[pending->tag];
 		ublk_dispatch_req_buf(ubq, pending, pio, issue_flags);
@@ -1517,31 +1528,48 @@ static inline bool ublk_need_map_req(const struct request *req)
 }
 
 /*
- * Copy between request bvecs and a pinned kernel buffer.
- * dir: ITER_DEST = write to kbuf (WRITE path), ITER_SOURCE = read from kbuf (READ path)
+ * Copy between request bvecs and pinned user buffer pages.
+ * Uses kmap_local_page() on both sides, avoiding copy_to/from_user
+ * page table walks since the buffer pages are already pinned.
+ *
+ * dir: ITER_DEST  = bio -> pool pages (WRITE: copy request data into user buf)
+ *      ITER_SOURCE = pool pages -> bio (READ: copy user buf data into request)
  */
-static size_t ublk_copy_pinned(const struct request *req, void *kbuf,
-			       unsigned int kbuf_len, int dir)
+static size_t ublk_copy_pinned(const struct request *req,
+			       struct page **pages, unsigned int buf_off,
+			       unsigned int copy_len, int dir)
 {
 	struct req_iterator iter;
 	struct bio_vec bv;
 	size_t done = 0;
 
 	rq_for_each_segment(bv, req, iter) {
-		unsigned int len = min(bv.bv_len, kbuf_len - (unsigned int)done);
-		void *bv_buf;
+		unsigned int bv_off = 0;
 
-		if (!len)
+		while (bv_off < bv.bv_len && done < copy_len) {
+			unsigned int pg_idx = (buf_off + done) >> PAGE_SHIFT;
+			unsigned int pg_off = (buf_off + done) & ~PAGE_MASK;
+			unsigned int len = min3(bv.bv_len - bv_off,
+						(unsigned int)PAGE_SIZE - pg_off,
+						copy_len - (unsigned int)done);
+			void *bv_buf, *pg_buf;
+
+			bv_buf = kmap_local_page(bv.bv_page) + bv.bv_offset + bv_off;
+			pg_buf = kmap_local_page(pages[pg_idx]) + pg_off;
+
+			if (dir == ITER_DEST)
+				memcpy(pg_buf, bv_buf, len);
+			else
+				memcpy(bv_buf, pg_buf, len);
+
+			kunmap_local(pg_buf);
+			kunmap_local(bv_buf);
+
+			bv_off += len;
+			done += len;
+		}
+		if (done >= copy_len)
 			break;
-
-		bv_buf = kmap_local_page(bv.bv_page) + bv.bv_offset;
-		if (dir == ITER_DEST)
-			memcpy(kbuf + done, bv_buf, len);
-		else
-			memcpy(bv_buf, kbuf + done, len);
-		kunmap_local(bv_buf);
-
-		done += len;
 	}
 	return done;
 }
@@ -1576,9 +1604,11 @@ static unsigned int ublk_map_io(const struct ublk_queue *ubq,
 	 * context is pretty fast, see ublk_pin_user_pages
 	 */
 	if (ublk_need_map_req(req)) {
-		/* pinned: memcpy via kaddr, no page table walk */
-		if (ublk_support_pinned_bufs(ubq) && io->sel_buf.kaddr)
-			return ublk_copy_pinned(req, io->sel_buf.kaddr,
+		/* pinned: kmap_local + memcpy, no page table walk */
+		if (io->sel_buf_pool && io->sel_buf_pool->pinned)
+			return ublk_copy_pinned(req,
+						io->sel_buf_pool->pages,
+						io->sel_buf.id * io->sel_buf_pool->buf_size,
 						rq_bytes, ITER_DEST);
 
 		{
@@ -1601,23 +1631,31 @@ static unsigned int ublk_unmap_io(const struct ublk_queue *ubq,
 {
 	const unsigned int rq_bytes = blk_rq_bytes(req);
 
+	pr_info("%s: tag %d need_map %d need_unmap %d pool_pinned %d\n",
+		__func__, req->tag, need_map, ublk_need_unmap_req(req),
+		io->sel_buf_pool ? io->sel_buf_pool->pinned : 0);
+
 	if (!need_map)
 		return rq_bytes;
 
 	if (ublk_need_unmap_req(req)) {
 		WARN_ON_ONCE(io->res > rq_bytes);
 
-		/* pinned: memcpy via kaddr, no page table walk */
-		if (ublk_support_pinned_bufs(ubq) && io->sel_buf.kaddr)
-			return ublk_copy_pinned(req, io->sel_buf.kaddr,
+		/* pinned: kmap_local + memcpy, no page table walk */
+		if (io->sel_buf_pool && io->sel_buf_pool->pinned)
+			return ublk_copy_pinned(req,
+						io->sel_buf_pool->pages,
+						io->sel_buf.id * io->sel_buf_pool->buf_size,
 						io->res, ITER_SOURCE);
 
 		{
 			struct iov_iter iter;
 			const int dir = ITER_SOURCE;
+			__u64 buf_addr = ublk_io_buf_addr(ubq, io);
 
-			import_ubuf(dir,
-				    u64_to_user_ptr(ublk_io_buf_addr(ubq, io)),
+			pr_info("ublk_unmap_io: tag %d buf_addr %llx buf_rings %d\n",
+				req->tag, buf_addr, ublk_support_buf_rings(ubq));
+			import_ubuf(dir, u64_to_user_ptr(buf_addr),
 				    io->res, &iter);
 			return ublk_copy_user_pages(req, 0, &iter, dir);
 		}
@@ -1725,9 +1763,14 @@ static void ublk_end_request(struct request *req, blk_status_t error)
 static inline void __ublk_complete_rq(struct request *req, struct ublk_io *io,
 				      bool need_map, struct io_comp_batch *iob)
 {
+	struct ublk_queue *ubq = req->mq_hctx->driver_data;
 	unsigned int unmapped_bytes;
 	blk_status_t res = BLK_STS_OK;
 	bool requeue;
+
+	pr_info("%s: qid %d tag %d op %s io->res %d has_buf_pool %d\n",
+		__func__, ubq->q_id, req->tag, blk_op_str(req_op(req)),
+		io->res, !!io->sel_buf_pool);
 
 	/* failed read IO if nothing is read */
 	if (!io->res && req_op(req) == REQ_OP_READ)
@@ -1753,6 +1796,14 @@ static inline void __ublk_complete_rq(struct request *req, struct ublk_io *io,
 		goto exit;
 
 	/* for READ request, writing data in iod->addr to rq buffers */
+	{
+		struct ublk_queue *_ubq = req->mq_hctx->driver_data;
+		pr_info("%s: unmap qid %d tag %d need_map %d buf_rings %d "
+			"sel_buf.user_addr %llx io->buf.addr %llx\n",
+			__func__, _ubq->q_id, req->tag, need_map,
+			ublk_support_buf_rings(_ubq),
+			io->sel_buf.user_addr, io->buf.addr);
+	}
 	unmapped_bytes = ublk_unmap_io(req->mq_hctx->driver_data,
 				       need_map, req, io);
 
@@ -1823,6 +1874,7 @@ static void ublk_complete_io_cmd(struct ublk_io *io, struct request *req,
 {
 	struct io_uring_cmd *cmd = __ublk_prep_compl_io_cmd(io, req);
 
+	pr_info("%s: tag %d res %d -> userspace\n", __func__, req->tag, res);
 	/* tell ublksrv one io request is coming */
 	io_uring_cmd_done(cmd, res, issue_flags);
 }
@@ -1832,6 +1884,8 @@ static void ublk_complete_io_cmd(struct ublk_io *io, struct request *req,
 static inline void __ublk_abort_rq(struct ublk_queue *ubq,
 		struct request *rq)
 {
+	pr_info("%s: qid %d tag %d op %s\n", __func__,
+		ubq->q_id, rq->tag, blk_op_str(req_op(rq)));
 	/* We cannot process this rq so just requeue it. */
 	if (ublk_nosrv_dev_should_queue_io(ubq->dev))
 		blk_mq_requeue_request(rq, false);
@@ -1919,6 +1973,10 @@ static bool ublk_start_io(const struct ublk_queue *ubq, struct request *req,
 {
 	unsigned mapped_bytes;
 
+	pr_info("%s: qid %d tag %d op %s bytes %u\n", __func__,
+		ubq->q_id, req->tag, blk_op_str(req_op(req)),
+		blk_rq_bytes(req));
+
 	/* shmem zero copy: skip data copy, pages already shared */
 	if (ublk_iod_is_shmem_zc(ubq, req->tag))
 		return true;
@@ -1954,9 +2012,9 @@ static void ublk_dispatch_req(struct ublk_queue *ubq, struct request *req)
 	int tag = req->tag;
 	struct ublk_io *io = &ubq->ios[tag];
 
-	pr_devel("%s: complete: qid %d tag %d io_flags %x addr %llx\n",
-			__func__, ubq->q_id, req->tag, io->flags,
-			ublk_get_iod(ubq, req->tag)->addr);
+	pr_info("%s: qid %d tag %d op %s bytes %u io_flags %x\n",
+		__func__, ubq->q_id, req->tag, blk_op_str(req_op(req)),
+		blk_rq_bytes(req), io->flags);
 
 	/*
 	 * Task is exiting if either:
@@ -1998,18 +2056,39 @@ static void ublk_dispatch_req_buf(struct ublk_queue *ubq,
 				  struct ublk_io *io,
 				  unsigned int issue_flags)
 {
+	pr_info("%s: qid %d tag %d op %s bytes %u\n", __func__,
+		ubq->q_id, req->tag, blk_op_str(req_op(req)),
+		blk_rq_bytes(req));
+
 	/* BUF_RINGS: select buffer and set iod->addr before copy */
 	if (ublk_support_buf_rings(ubq) && ublk_rq_has_data(req)) {
 		struct ublksrv_io_desc *iod = ublk_get_iod(ubq, req->tag);
+		int ret;
 
-		if (ublk_select_buf(ubq, io, blk_rq_bytes(req))) {
+		ret = ublk_select_buf(ubq, io, blk_rq_bytes(req));
+		if (ret == -EINVAL) {
+			pr_info("%s: qid %d tag %d EINVAL no pool for size %u\n",
+				__func__, ubq->q_id, req->tag,
+				blk_rq_bytes(req));
+			__ublk_abort_rq(ubq, req);
+			return;
+		}
+		if (ret) {
+			pr_info("%s: qid %d tag %d ENOBUFS, adding to pending\n",
+				__func__, ubq->q_id, req->tag);
 			list_add_tail(&req->queuelist, &ubq->req_buf_pending);
 			return;
 		}
+		pr_info("%s: qid %d tag %d got buf addr %llx size %u\n",
+			__func__, ubq->q_id, req->tag,
+			io->sel_buf.user_addr, io->sel_buf.len);
+		io->buf.addr = io->sel_buf.user_addr;
 		iod->addr = io->sel_buf.user_addr;
 	}
 
 	if (!ublk_start_io(ubq, req, io)) {
+		pr_info("%s: qid %d tag %d start_io failed, recycling buf\n",
+			__func__, ubq->q_id, req->tag);
 		if (io->sel_buf_pool)
 			ublk_recycle_buf(ubq, io);
 		return;
@@ -2018,6 +2097,8 @@ static void ublk_dispatch_req_buf(struct ublk_queue *ubq,
 	if (ublk_support_auto_buf_reg(ubq) && ublk_rq_has_data(req)) {
 		ublk_auto_buf_dispatch(ubq, req, io, io->cmd, issue_flags);
 	} else {
+		pr_info("%s: qid %d tag %d completing io cmd to userspace\n",
+			__func__, ubq->q_id, req->tag);
 		ublk_init_req_ref(ubq, io);
 		ublk_complete_io_cmd(io, req, UBLK_IO_RES_OK, issue_flags);
 	}
@@ -2030,15 +2111,25 @@ static bool __ublk_batch_prep_dispatch(struct ublk_queue *ubq,
 	struct ublk_device *ub = data->ub;
 	struct ublk_io *io = &ubq->ios[tag];
 	struct request *req = blk_mq_tag_to_rq(ub->tag_set.tags[ubq->q_id], tag);
+
+	pr_info("%s: qid %d tag %d op %s bytes %u\n", __func__,
+		ubq->q_id, tag, blk_op_str(req_op(req)), blk_rq_bytes(req));
 	enum auto_buf_reg_res res = AUTO_BUF_REG_FALLBACK;
 	struct io_uring_cmd *cmd = data->cmd;
 
 	/* BUF_RINGS: select buffer before copy */
 	if (ublk_support_buf_rings(ubq) && ublk_rq_has_data(req)) {
 		struct ublksrv_io_desc *iod = ublk_get_iod(ubq, tag);
+		int ret;
 
-		if (ublk_select_buf(ubq, io, blk_rq_bytes(req)))
+		ret = ublk_select_buf(ubq, io, blk_rq_bytes(req));
+		if (ret == -EINVAL) {
+			__ublk_abort_rq(ubq, req);
 			return false;
+		}
+		if (ret)
+			return false;
+		io->buf.addr = io->sel_buf.user_addr;
 		iod->addr = io->sel_buf.user_addr;
 	}
 
@@ -2427,6 +2518,10 @@ static blk_status_t ublk_queue_rq(struct blk_mq_hw_ctx *hctx,
 	struct request *rq = bd->rq;
 	bool should_queue;
 	blk_status_t res;
+
+	pr_info("%s: qid %d tag %d op %s bytes %u\n", __func__,
+		ubq->q_id, rq->tag, blk_op_str(req_op(rq)),
+		blk_rq_bytes(rq));
 
 	res = __ublk_queue_rq_common(ubq, rq, &should_queue);
 	if (!should_queue)
@@ -3349,7 +3444,9 @@ ublk_config_io_buf(const struct ublk_device *ub, struct ublk_io *io,
 	if (ublk_dev_support_auto_buf_reg(ub))
 		return ublk_handle_auto_buf_reg(io, cmd, buf_idx);
 
-	io->buf.addr = buf_addr;
+	/* BUF_RINGS: kernel selected the buffer at dispatch, don't overwrite */
+	if (!(ub->dev_info.flags & UBLK_F_BUF_RINGS))
+		io->buf.addr = buf_addr;
 	return 0;
 }
 
@@ -3374,6 +3471,10 @@ static void ublk_io_release(void *priv)
 	struct ublk_queue *ubq = rq->mq_hctx->driver_data;
 	struct ublk_io *io = &ubq->ios[rq->tag];
 
+	pr_info("%s: qid %d tag %d on_task %d task_reg_bufs %d ref %u\n",
+		__func__, ubq->q_id, rq->tag,
+		current == io->task, io->task_registered_buffers,
+		refcount_read(&io->ref));
 	/*
 	 * task_registered_buffers may be 0 if buffers were registered off task
 	 * but unregistered on task. Or after UBLK_IO_COMMIT_AND_FETCH_REQ.
@@ -3521,13 +3622,18 @@ static int ublk_check_commit_and_fetch(const struct ublk_device *ub,
 	struct request *req = io->req;
 
 	if (ublk_dev_need_map_io(ub)) {
-		/*
-		 * COMMIT_AND_FETCH_REQ has to provide IO buffer if
-		 * NEED GET DATA is not enabled or it is Read IO.
-		 */
-		if (!buf_addr && (!ublk_dev_need_get_data(ub) ||
-					req_op(req) == REQ_OP_READ))
+		/* BUF_RINGS: kernel selects buffers, server must not provide addr */
+		if (ub->dev_info.flags & UBLK_F_BUF_RINGS) {
+			if (buf_addr)
+				return -EINVAL;
+		} else if (!buf_addr && (!ublk_dev_need_get_data(ub) ||
+					req_op(req) == REQ_OP_READ)) {
+			/*
+			 * COMMIT_AND_FETCH_REQ has to provide IO buffer if
+			 * NEED GET DATA is not enabled or it is Read IO.
+			 */
 			return -EINVAL;
+		}
 	} else if (req_op(req) != REQ_OP_ZONE_APPEND && buf_addr) {
 		/*
 		 * User copy requires addr to be unset when command is
@@ -3679,8 +3785,6 @@ static int ublk_add_buf_pool(struct io_uring_cmd *cmd,
 		buf->user_addr = addr + (u64)i * buf_size;
 		buf->len = buf_size;
 		buf->id = i;
-		if (pinned)
-			buf->kaddr = pool->vmap_addr + (size_t)i * buf_size;
 	}
 
 	/* all buffers start available: head=0, tail=nr_bufs */
@@ -3805,20 +3909,37 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 		return ublk_daemon_register_io_buf(cmd, ub, q_id, tag, io, addr,
 						   issue_flags);
 	case UBLK_IO_COMMIT_AND_FETCH_REQ:
+		pr_info("COMMIT_AND_FETCH: qid %d tag %d result %d addr %llx\n",
+			q_id, tag, result, addr);
 		ret = ublk_check_commit_and_fetch(ub, io, addr);
-		if (ret)
+		if (ret) {
+			pr_info("COMMIT_AND_FETCH: qid %d tag %d check failed ret %d\n",
+				q_id, tag, ret);
+			io->res = -EIO;
+			__ublk_complete_rq(io->req, io,
+					   ublk_dev_need_map_io(ub), NULL);
 			goto out;
+		}
 		io->res = result;
 		req = ublk_fill_io_cmd(io, cmd);
+		pr_info("COMMIT_AND_FETCH: qid %d tag %d fill_io_cmd done, req op %s\n",
+			q_id, tag, blk_op_str(req_op(req)));
 		ret = ublk_config_io_buf(ub, io, cmd, addr, &buf_idx);
+		pr_info("COMMIT_AND_FETCH: qid %d tag %d config_io_buf ret %d buf_idx %d\n",
+			q_id, tag, ret, buf_idx);
 		if (buf_idx != UBLK_INVALID_BUF_IDX)
 			io_buffer_unregister(cmd, buf_idx, issue_flags);
 		compl = ublk_need_complete_req(ub, io);
+		pr_info("COMMIT_AND_FETCH: qid %d tag %d compl %d need_req_ref %d\n",
+			q_id, tag, compl, ublk_dev_need_req_ref(ub));
 
 		if (req_op(req) == REQ_OP_ZONE_APPEND)
 			req->__sector = addr;
 		if (compl)
 			__ublk_complete_rq(req, io, ublk_dev_need_map_io(ub), NULL);
+		else
+			pr_info("COMMIT_AND_FETCH: qid %d tag %d NOT completing (waiting for ref)\n",
+				q_id, tag);
 
 		if (ret)
 			goto out;
@@ -3844,7 +3965,7 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 	return -EIOCBQUEUED;
 
  out:
-	pr_devel("%s: complete: cmd op %d, tag %d ret %x io_flags %x\n",
+	pr_info("%s: out: cmd op %d, tag %d ret %x io_flags %x\n",
 			__func__, cmd_op, tag, ret, io ? io->flags : 0);
 	return ret;
 }
@@ -4510,17 +4631,7 @@ static const struct file_operations ublk_ch_batch_io_fops = {
 static void ublk_buf_pool_destroy(struct ublk_buf_pool *pool)
 {
 	if (pool->pinned) {
-		vunmap(pool->vmap_addr);
 		unpin_user_pages(pool->pages, pool->nr_pages);
-
-		if (pool->user) {
-			atomic_long_sub(pool->nr_pages, &pool->user->locked_vm);
-			free_uid(pool->user);
-		}
-
-		atomic64_sub(pool->nr_pages, &pool->mm_account->pinned_vm);
-		mmdrop(pool->mm_account);
-
 		kvfree(pool->pages);
 	}
 	kvfree(pool);
