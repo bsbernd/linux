@@ -51,6 +51,11 @@
 #include <uapi/linux/fs.h>
 #include <uapi/linux/ublk_cmd.h>
 
+/* for the dkms module of 7.1 on 7.0 kernel */
+#ifndef BLK_SPLIT_INTERVAL_CAPABLE
+#define BLK_SPLIT_INTERVAL_CAPABLE 0
+#endif
+
 #define UBLK_MINORS		(1U << MINORBITS)
 
 #define UBLK_INVALID_BUF_IDX 	((u16)-1)
