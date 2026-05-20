@@ -3010,11 +3010,36 @@ static void ublk_stop_dev_unlocked(struct ublk_device *ub)
 
 static void ublk_stop_dev(struct ublk_device *ub)
 {
+	struct gendisk *disk;
+	int i;
+
 	mutex_lock(&ub->mutex);
-	ublk_stop_dev_unlocked(ub);
+	if (ub->dev_info.state == UBLK_S_DEV_DEAD) {
+		mutex_unlock(&ub->mutex);
+		goto out;
+	}
+	if (ublk_nosrv_dev_should_queue_io(ub))
+		ublk_force_abort_dev(ub);
+	disk = ublk_detach_disk(ub);
 	mutex_unlock(&ub->mutex);
-	cancel_work_sync(&ub->partition_scan_work);
+
+	/*
+	 * Cancel the server's pending uring commands, then abort any requests
+	 * still owned by the server.  Both must happen before del_gendisk() so
+	 * the queue can drain: the server may be blocked waiting for uring
+	 * completions that only arrive after del_gendisk() returns, and
+	 * del_gendisk() itself blocks until all in-flight requests complete.
+	 */
 	ublk_cancel_dev(ub);
+	ublk_set_canceling(ub, true);
+	for (i = 0; i < ub->dev_info.nr_hw_queues; i++)
+		ublk_abort_queue(ub, ublk_get_queue(ub, i));
+	mutex_unlock(&ub->cancel_mutex);
+	blk_mq_kick_requeue_list(disk->queue);
+	del_gendisk(disk);
+	put_disk(disk);
+out:
+	cancel_work_sync(&ub->partition_scan_work);
 }
 
 static void ublk_reset_io_flags(struct ublk_queue *ubq, struct ublk_io *io)
