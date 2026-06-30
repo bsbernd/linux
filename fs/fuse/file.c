@@ -1416,13 +1416,6 @@ static ssize_t fuse_perform_write(struct kiocb *iocb, struct iov_iter *ii)
 	return res;
 }
 
-static bool fuse_io_past_eof(struct kiocb *iocb, struct iov_iter *iter)
-{
-	struct inode *inode = file_inode(iocb->ki_filp);
-
-	return iocb->ki_pos + iov_iter_count(iter) > i_size_read(inode);
-}
-
 /*
  * @return true if an exclusive lock for direct IO writes is needed
  */
@@ -1448,10 +1441,6 @@ static bool fuse_dio_wr_exclusive_lock(struct kiocb *iocb, struct iov_iter *from
 	if (test_bit(FUSE_I_CACHE_IO_MODE, &fi->state))
 		return true;
 
-	/* Parallel dio beyond EOF is not supported, at least for now. */
-	if (fuse_io_past_eof(iocb, from))
-		return true;
-
 	return false;
 }
 
@@ -1470,11 +1459,8 @@ static void fuse_dio_lock(struct kiocb *iocb, struct iov_iter *from,
 		 * New parallal dio allowed only if inode is not in caching
 		 * mode and denies new opens in caching mode. This check
 		 * should be performed only after taking shared inode lock.
-		 * Previous past eof check was without inode lock and might
-		 * have raced, so check it again.
 		 */
-		if (fuse_io_past_eof(iocb, from) ||
-		    fuse_inode_uncached_io_start(fi, NULL) != 0) {
+		if (fuse_inode_uncached_io_start(fi, NULL) != 0) {
 			inode_unlock_shared(inode);
 			inode_lock(inode);
 			*exclusive = true;
@@ -1788,14 +1774,16 @@ static ssize_t __fuse_direct_read(struct fuse_io_priv *io,
 	return res;
 }
 
-static ssize_t fuse_direct_IO(struct kiocb *iocb, struct iov_iter *iter);
+static ssize_t __fuse_direct_IO(struct kiocb *iocb, struct iov_iter *iter,
+				bool exclusive);
 
 static ssize_t fuse_direct_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
 	ssize_t res;
 
 	if (!is_sync_kiocb(iocb)) {
-		res = fuse_direct_IO(iocb, to);
+		/* exclusive is unused on reads; rollback is write-only */
+		res = __fuse_direct_IO(iocb, to, true);
 	} else {
 		struct fuse_io_priv io = FUSE_IO_PRIV_SYNC(iocb);
 
@@ -1818,7 +1806,7 @@ static ssize_t fuse_direct_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (res > 0) {
 		task_io_account_write(res);
 		if (!is_sync_kiocb(iocb)) {
-			res = fuse_direct_IO(iocb, from);
+			res = __fuse_direct_IO(iocb, from, exclusive);
 		} else {
 			struct fuse_io_priv io = FUSE_IO_PRIV_SYNC(iocb);
 
@@ -2733,7 +2721,7 @@ static inline loff_t fuse_round_up(struct fuse_conn *fc, loff_t off)
 }
 
 static ssize_t
-fuse_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
+__fuse_direct_IO(struct kiocb *iocb, struct iov_iter *iter, bool exclusive)
 {
 	DECLARE_COMPLETION_ONSTACK(wait);
 	ssize_t ret = 0;
@@ -2827,12 +2815,25 @@ fuse_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 
 	if (iov_iter_rw(iter) == WRITE) {
 		fuse_write_update_attr(inode, pos, ret);
-		/* For extending writes we already hold exclusive lock */
-		if (ret < 0 && offset + count > i_size)
+		/*
+		 * Whole-file rollback is only safe under an exclusive lock.
+		 * Parallel writers commit i_size only on success (nothing to
+		 * undo); the server owns failed-extend cleanup.
+		 */
+		if (exclusive && ret < 0 && offset + count > i_size)
 			fuse_do_truncate(file);
 	}
 
 	return ret;
+}
+
+static ssize_t fuse_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
+{
+	/*
+	 * Only reached via generic_file_direct_write() (caching-mode
+	 * O_DIRECT), which holds the inode lock exclusively.
+	 */
+	return __fuse_direct_IO(iocb, iter, true);
 }
 
 static int fuse_writeback_range(struct inode *inode, loff_t start, loff_t end)
