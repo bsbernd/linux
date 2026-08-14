@@ -1617,11 +1617,14 @@ exit:
 	ublk_end_request(req, res);
 }
 
+/* Claims the union, so the caller must have tested io->flags under the lock */
 static struct io_uring_cmd *__ublk_prep_compl_io_cmd(struct ublk_io *io,
 						     struct request *req)
 {
 	/* read cmd first because req will overwrite it */
 	struct io_uring_cmd *cmd = io->cmd;
+
+	lockdep_assert_held(&io->lock);
 
 	/* mark this cmd owned by ublksrv */
 	io->flags |= UBLK_IO_FLAG_OWNED_BY_SRV;
@@ -1639,7 +1642,11 @@ static struct io_uring_cmd *__ublk_prep_compl_io_cmd(struct ublk_io *io,
 static void ublk_complete_io_cmd(struct ublk_io *io, struct request *req,
 				 int res, unsigned issue_flags)
 {
-	struct io_uring_cmd *cmd = __ublk_prep_compl_io_cmd(io, req);
+	struct io_uring_cmd *cmd;
+
+	ublk_io_lock(io);
+	cmd = __ublk_prep_compl_io_cmd(io, req);
+	ublk_io_unlock(io);
 
 	/* tell ublksrv one io request is coming */
 	io_uring_cmd_done(cmd, res, issue_flags);
@@ -1675,13 +1682,14 @@ enum auto_buf_reg_res {
  * Setup io state after auto buffer registration.
  *
  * Must be called after ublk_auto_buf_register() is done.
- * Caller must hold io->lock in batch context.
  */
 static void ublk_auto_buf_io_setup(const struct ublk_queue *ubq,
 				   struct request *req, struct ublk_io *io,
 				   struct io_uring_cmd *cmd,
 				   enum auto_buf_reg_res res)
 {
+	lockdep_assert_held(&io->lock);
+
 	if (res == AUTO_BUF_REG_OK) {
 		io->task_registered_buffers = 1;
 		io->buf_ctx_handle = io_uring_cmd_ctx_handle(cmd);
@@ -1727,7 +1735,9 @@ static void ublk_auto_buf_dispatch(const struct ublk_queue *ubq,
 			issue_flags);
 
 	if (res != AUTO_BUF_REG_FAIL) {
+		ublk_io_lock(io);
 		ublk_auto_buf_io_setup(ubq, req, io, cmd, res);
+		ublk_io_unlock(io);
 		io_uring_cmd_done(cmd, UBLK_IO_RES_OK, issue_flags);
 	}
 }
@@ -2375,6 +2385,8 @@ static void ublk_queue_reinit(struct ublk_device *ub, struct ublk_queue *ubq)
 	for (i = 0; i < ubq->q_depth; i++) {
 		struct ublk_io *io = &ubq->ios[i];
 
+		ublk_io_lock(io);
+		spin_lock(&ubq->cancel_lock);
 		/*
 		 * UBLK_IO_FLAG_CANCELED is kept for avoiding to touch
 		 * io->cmd
@@ -2396,6 +2408,8 @@ static void ublk_queue_reinit(struct ublk_device *ub, struct ublk_queue *ubq)
 
 		WARN_ON_ONCE(refcount_read(&io->ref));
 		WARN_ON_ONCE(io->task_registered_buffers);
+		spin_unlock(&ubq->cancel_lock);
+		ublk_io_unlock(io);
 	}
 }
 
@@ -2418,10 +2432,7 @@ static void ublk_reset_ch_dev(struct ublk_device *ub)
 	for (i = 0; i < ub->dev_info.nr_hw_queues; i++) {
 		struct ublk_queue *ubq = ublk_get_queue(ub, i);
 
-		/* Sync with ublk_cancel_cmd() */
-		spin_lock(&ubq->cancel_lock);
 		ublk_queue_reinit(ub, ubq);
-		spin_unlock(&ubq->cancel_lock);
 	}
 
 	/* set to NULL, otherwise new tasks cannot mmap io_cmd_buf */
@@ -2558,9 +2569,6 @@ static void ublk_ch_release_work_fn(struct work_struct *work)
 	/*
 	 * All uring_cmd are done now, so abort any request outstanding to
 	 * the ublk server
-	 *
-	 * This can be done in lockless way because ublk server has been
-	 * gone
 	 *
 	 * More importantly, we have to provide forward progress guarantee
 	 * without holding ub->mutex, otherwise control task grabbing
@@ -2724,9 +2732,17 @@ static void ublk_abort_queue(struct ublk_device *ub, struct ublk_queue *ubq)
 
 	for (i = 0; i < ubq->q_depth; i++) {
 		struct ublk_io *io = &ubq->ios[i];
+		struct request *req;
 
-		if (io->flags & UBLK_IO_FLAG_OWNED_BY_SRV)
-			__ublk_fail_req(ub, io, io->req);
+		ublk_io_lock(io);
+		if (io->flags & UBLK_IO_FLAG_OWNED_BY_SRV) {
+			io->flags &= ~UBLK_IO_FLAG_OWNED_BY_SRV;
+			req = io->req;
+			ublk_io_unlock(io);
+			__ublk_fail_req(ub, io, req);
+			continue;
+		}
+		ublk_io_unlock(io);
 	}
 
 	if (ublk_support_batch_io(ubq))
@@ -2772,8 +2788,11 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	struct request *req;
 	bool done;
 
-	if (!(io->flags & UBLK_IO_FLAG_ACTIVE))
+	ublk_io_lock(io);
+	if (!(io->flags & UBLK_IO_FLAG_ACTIVE)) {
+		ublk_io_unlock(io);
 		return;
+	}
 
 	/*
 	 * Don't try to cancel this command if the request is started for
@@ -2786,8 +2805,10 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	 * that ublk_dispatch_req() is always called
 	 */
 	req = blk_mq_tag_to_rq(ub->tag_set.tags[ubq->q_id], tag);
-	if (req && blk_mq_request_started(req) && req->tag == tag)
+	if (req && blk_mq_request_started(req) && req->tag == tag) {
+		ublk_io_unlock(io);
 		return;
+	}
 
 	spin_lock(&ubq->cancel_lock);
 	done = !!(io->flags & UBLK_IO_FLAG_CANCELED);
@@ -2798,6 +2819,7 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 		io->cmd = NULL;
 	}
 	spin_unlock(&ubq->cancel_lock);
+	ublk_io_unlock(io);
 
 	if (!done && cmd)
 		io_uring_cmd_done(cmd, UBLK_IO_RES_ABORT, issue_flags);
@@ -3022,9 +3044,11 @@ static void ublk_stop_dev(struct ublk_device *ub)
 static void ublk_reset_io_flags(struct ublk_queue *ubq, struct ublk_io *io)
 {
 	/* UBLK_IO_FLAG_CANCELED can be cleared now */
+	ublk_io_lock(io);
 	spin_lock(&ubq->cancel_lock);
 	io->flags &= ~UBLK_IO_FLAG_CANCELED;
 	spin_unlock(&ubq->cancel_lock);
+	ublk_io_unlock(io);
 }
 
 /* reset per-queue io flags */
@@ -3462,8 +3486,15 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 		ret = ublk_validate_io_buf(ub, cmd, &auto_buf);
 		if (ret)
 			goto out;
+		ublk_io_lock(io);
+		if (!(io->flags & UBLK_IO_FLAG_OWNED_BY_SRV)) {
+			ublk_io_unlock(io);
+			ret = -EBUSY;
+			goto out;
+		}
 		io->res = result;
 		req = ublk_fill_io_cmd(io, cmd);
+		ublk_io_unlock(io);
 		ublk_apply_io_buf(ub, io, cmd, addr, &auto_buf, &buf_idx);
 		if (buf_idx != UBLK_INVALID_BUF_IDX)
 			io_buffer_unregister_bvec(cmd, buf_idx, issue_flags);
@@ -3481,10 +3512,19 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 		 * uring_cmd active first and prepare for handling new requeued
 		 * request
 		 */
+		ublk_io_lock(io);
+		if (!(io->flags & UBLK_IO_FLAG_OWNED_BY_SRV)) {
+			ublk_io_unlock(io);
+			ret = -EBUSY;
+			goto out;
+		}
 		req = ublk_fill_io_cmd(io, cmd);
+		ublk_io_unlock(io);
 		io->buf.addr = addr;
 		if (likely(ublk_get_data(ubq, io, req))) {
+			ublk_io_lock(io);
 			__ublk_prep_compl_io_cmd(io, req);
+			ublk_io_unlock(io);
 			return UBLK_IO_RES_OK;
 		}
 		break;
