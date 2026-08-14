@@ -3080,7 +3080,8 @@ static void __ublk_fail_req(struct ublk_device *ub, struct ublk_io *io,
 			ublk_io_lock(io);
 			io->flags &= ~UBLK_IO_FLAG_REQUEUE_REQ;
 			ublk_io_unlock(io);
-			blk_mq_requeue_request(req, false);
+			/* teardown's own kick may already have run */
+			blk_mq_requeue_request(req, true);
 		}
 	} else {
 		io->res = -EIO;
@@ -3199,9 +3200,9 @@ static void ublk_abort_dev(struct ublk_device *ub)
 
 	ublk_td_step(ub, UBLK_TD_ABORT_DEV);
 
-	mutex_lock(&ub->cancel_mutex);
-	ublk_set_canceling(ub, true);
+	ublk_start_cancel(ub);
 
+	mutex_lock(&ub->cancel_mutex);
 	/* tags queued for dispatch hold no request yet, so drain them first */
 	for (i = 0; i < ub->dev_info.nr_hw_queues; i++) {
 		struct ublk_queue *ubq = ublk_get_queue(ub, i);
@@ -3388,7 +3389,10 @@ static void ublk_cancel_queue(struct ublk_queue *ubq)
 		ublk_cancel_cmd(ubq, i, IO_URING_F_UNLOCKED);
 }
 
-/* Cancel all pending commands, must be called after del_gendisk() returns */
+/*
+ * Runs with no ublk lock held: io_uring_cmd_done() takes ->uring_lock, and
+ * ->cancel_fn() takes cancel_mutex under it.
+ */
 static void ublk_cancel_dev(struct ublk_device *ub)
 {
 	u16 i;
@@ -3469,6 +3473,11 @@ static void ublk_stop_dev_unlocked(struct ublk_device *ub)
 
 	if (ublk_nosrv_dev_should_queue_io(ub))
 		ublk_force_abort_dev(ub);
+
+	/* del_gendisk() waits for these, so get rid of them first */
+	ublk_abort_dev(ub);
+	blk_mq_kick_requeue_list(ub->ub_disk->queue);
+
 	del_gendisk(ub->ub_disk);
 	disk = ublk_detach_disk(ub);
 	put_disk(disk);
