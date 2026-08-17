@@ -2530,8 +2530,11 @@ static void ublk_set_canceling(struct ublk_device *ub, bool canceling)
 	u16 i;
 
 	ub->canceling = canceling;
-	for (i = 0; i < ub->dev_info.nr_hw_queues; i++)
-		ublk_get_queue(ub, i)->canceling = canceling;
+	for (i = 0; i < ub->dev_info.nr_hw_queues; i++) {
+		struct ublk_queue *ubq = ublk_get_queue(ub, i);
+
+		WRITE_ONCE(ubq->canceling, canceling);
+	}
 }
 
 static bool ublk_check_and_reset_active_ref(struct ublk_device *ub)
@@ -3120,7 +3123,7 @@ static void ublk_reset_io_flags(struct ublk_queue *ubq, struct ublk_io *io)
 static void ublk_queue_reset_io_flags(struct ublk_queue *ubq)
 {
 	spin_lock(&ubq->cancel_lock);
-	ubq->canceling = false;
+	WRITE_ONCE(ubq->canceling, false);
 	spin_unlock(&ubq->cancel_lock);
 	ubq->fail_io = false;
 }
@@ -3242,6 +3245,35 @@ ublk_fill_io_cmd(struct ublk_io *io, struct io_uring_cmd *cmd)
 	io->flags &= ~UBLK_IO_FLAG_OWNED_BY_SRV;
 
 	return req;
+}
+
+/*
+ * Take a parked command back once the queue is canceling - the tag walk that
+ * aborts parked commands on teardown (ublk_cancel_dev) runs once, so a
+ * command parked after its own tag was walked would never be completed.
+ *
+ * @return 0 to leave the command parked, otherwise the value the caller must
+ * return.
+ */
+static int ublk_check_canceling(struct ublk_queue *ubq, struct ublk_io *io)
+{
+	bool canceled;
+
+	if (likely(!READ_ONCE(ubq->canceling)))
+		return 0;
+
+	ublk_io_lock(io);
+	spin_lock(&ubq->cancel_lock);
+	canceled = !!(io->flags & UBLK_IO_FLAG_CANCELED);
+	if (!canceled) {
+		io->flags |= UBLK_IO_FLAG_CANCELED;
+		io->cmd = NULL;
+	}
+	spin_unlock(&ubq->cancel_lock);
+	ublk_io_unlock(io);
+
+	/* ublk_cancel_cmd() got here first and already completed the cmd */
+	return canceled ? -EIOCBQUEUED : UBLK_IO_RES_ABORT;
 }
 
 static inline void ublk_prep_cancel(struct io_uring_cmd *cmd,
@@ -3588,6 +3620,11 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 	default:
 		goto out;
 	}
+
+	ret = ublk_check_canceling(ubq, io);
+	if (unlikely(ret))
+		return ret;
+
 	ublk_prep_cancel(cmd, issue_flags, ubq, tag);
 	return -EIOCBQUEUED;
 
@@ -3774,7 +3811,7 @@ static int ublk_batch_unprep_io(struct ublk_queue *ubq,
 	if (ublk_queue_ready(ubq)) {
 		data->ub->nr_queue_ready--;
 		spin_lock(&ubq->cancel_lock);
-		ubq->canceling = true;
+		WRITE_ONCE(ubq->canceling, true);
 		spin_unlock(&ubq->cancel_lock);
 	}
 	ubq->nr_io_ready--;
