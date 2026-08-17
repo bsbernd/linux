@@ -190,6 +190,12 @@ struct ublk_batch_io_data {
  */
 #define UBLK_IO_FLAG_AUTO_BUF_REG 	0x10
 
+/*
+ * Teardown chose requeue over completion, but the ublk server still holds a
+ * reference. The last put does the requeue.
+ */
+#define UBLK_IO_FLAG_REQUEUE_REQ	0x40
+
 /* atomic RW with ubq->cancel_lock */
 #define UBLK_IO_FLAG_CANCELED	0x80000000
 
@@ -1284,6 +1290,23 @@ static inline void ublk_put_req_ref(struct ublk_io *io, struct request *req)
 	if (!refcount_dec_and_test(&io->ref))
 		return;
 
+	/*
+	 * Unlocked test: refcount_dec_and_test() gives ACQUIRE ordering on
+	 * success, and the flag is stored before the dispatch reference is
+	 * dropped, so the winner of the last put always observes it.  Only
+	 * that winner gets here, so the flag needs no re-check under the
+	 * lock; the lock is for the read-modify-write on io->flags, whose
+	 * other bits are updated concurrently.
+	 */
+	if (unlikely(io->flags & UBLK_IO_FLAG_REQUEUE_REQ)) {
+		ublk_io_lock(io);
+		io->flags &= ~UBLK_IO_FLAG_REQUEUE_REQ;
+		ublk_io_unlock(io);
+		/* teardown's own kick may already have run */
+		blk_mq_requeue_request(req, true);
+		return;
+	}
+
 	/* ublk_need_map_io() and ublk_need_req_ref() are mutually exclusive */
 	__ublk_complete_rq(req, io, false, NULL);
 }
@@ -1294,6 +1317,14 @@ static inline bool ublk_sub_req_ref(struct ublk_io *io)
 
 	io->task_registered_buffers = 0;
 	return refcount_sub_and_test(sub_refs, &io->ref);
+}
+
+static bool ublk_need_complete_req(const struct ublk_device *ub,
+				   struct ublk_io *io)
+{
+	if (ublk_dev_need_req_ref(ub))
+		return ublk_sub_req_ref(io);
+	return true;
 }
 
 static inline bool ublk_need_get_data(const struct ublk_queue *ubq)
@@ -2613,8 +2644,13 @@ static bool ublk_check_and_reset_active_ref(struct ublk_device *ub)
 			if (refs != UBLK_REFCOUNT_INIT && refs != 0)
 				return true;
 
-			/* reset to zero if the io hasn't active references */
-			refcount_set(&io->ref, 0);
+			/*
+			 * No active reference left.  Add
+			 * io->task_registered_buffers to io->ref and clear
+			 * it, so io->ref alone holds the reference taken at
+			 * dispatch.  __ublk_fail_req() drops that one.
+			 */
+			refcount_set(&io->ref, refs);
 			io->task_registered_buffers = 0;
 		}
 	}
@@ -2782,17 +2818,41 @@ static int ublk_ch_mmap(struct file *filp, struct vm_area_struct *vma)
 	return remap_pfn_range(vma, vma->vm_start, pfn, sz, vma->vm_page_prot);
 }
 
+/*
+ * @has_dispatch_ref: the tag holds the reference ublk_init_req_ref() takes at
+ * dispatch. That happens together with UBLK_IO_FLAG_OWNED_BY_SRV, so callers
+ * selecting on that flag pass true, and callers taking tags that are still
+ * queued for dispatch pass false. Note a queued tag is already started; being
+ * started and holding the reference are different points.
+ */
 static void __ublk_fail_req(struct ublk_device *ub, struct ublk_io *io,
-		struct request *req)
+		struct request *req, bool has_dispatch_ref)
 {
 	WARN_ON_ONCE(!ublk_dev_support_batch_io(ub) &&
 			io->flags & UBLK_IO_FLAG_ACTIVE);
 
-	if (ublk_nosrv_should_reissue_outstanding(ub))
-		blk_mq_requeue_request(req, false);
-	else {
+	if (ublk_nosrv_should_reissue_outstanding(ub)) {
+		/*
+		 * Needs to be set before dropping the dispatch reference, so
+		 * that the last reference drop (server or here) requeues.
+		 */
+		ublk_io_lock(io);
+		io->flags |= UBLK_IO_FLAG_REQUEUE_REQ;
+		ublk_io_unlock(io);
+
+		if (!has_dispatch_ref || ublk_need_complete_req(ub, io)) {
+			/* this side dropped the last ref */
+			ublk_io_lock(io);
+			io->flags &= ~UBLK_IO_FLAG_REQUEUE_REQ;
+			ublk_io_unlock(io);
+			blk_mq_requeue_request(req, false);
+		}
+	} else {
 		io->res = -EIO;
-		__ublk_complete_rq(req, io, ublk_dev_need_map_io(ub), NULL);
+		/* the last reference drop (server or here) completes */
+		if (!has_dispatch_ref || ublk_need_complete_req(ub, io))
+			__ublk_complete_rq(req, io, ublk_dev_need_map_io(ub),
+					   NULL);
 	}
 }
 
@@ -2809,8 +2869,12 @@ static void ublk_abort_batch_queue(struct ublk_device *ub,
 		struct request *req = blk_mq_tag_to_rq(
 				ub->tag_set.tags[ubq->q_id], tag);
 
+		/*
+		 * Started when it was queued, but pulled off the fifo before
+		 * ublk_dispatch_req() ran, never got the dispatch ref.
+		 */
 		if (!WARN_ON_ONCE(!req || !blk_mq_request_started(req)))
-			__ublk_fail_req(ub, &ubq->ios[tag], req);
+			__ublk_fail_req(ub, &ubq->ios[tag], req, false);
 	}
 }
 
@@ -2835,7 +2899,8 @@ static void ublk_abort_queue(struct ublk_device *ub, struct ublk_queue *ubq)
 			io->flags &= ~UBLK_IO_FLAG_OWNED_BY_SRV;
 			req = io->req;
 			ublk_io_unlock(io);
-			__ublk_fail_req(ub, io, req);
+			/* OWNED_BY_SRV, dispatch reference is held */
+			__ublk_fail_req(ub, io, req, true);
 			continue;
 		}
 		ublk_io_unlock(io);
@@ -3467,14 +3532,6 @@ static int ublk_check_commit_and_fetch(const struct ublk_device *ub,
 	return 0;
 }
 
-static bool ublk_need_complete_req(const struct ublk_device *ub,
-				   struct ublk_io *io)
-{
-	if (ublk_dev_need_req_ref(ub))
-		return ublk_sub_req_ref(io);
-	return true;
-}
-
 static bool ublk_get_data(const struct ublk_queue *ubq, struct ublk_io *io,
 			  struct request *req)
 {
@@ -3651,7 +3708,8 @@ static inline struct request *__ublk_check_and_get_req(struct ublk_device *ub,
 
 	/*
 	 * can't use io->req in case of concurrent UBLK_IO_COMMIT_AND_FETCH_REQ,
-	 * which would overwrite it with io->cmd
+	 * which would overwrite it with io->cmd. Taking a reference first does
+	 * not help: that overwrite happens before the commit drops its own.
 	 */
 	req = blk_mq_tag_to_rq(ub->tag_set.tags[q_id], tag);
 	if (!req)
@@ -4212,7 +4270,6 @@ ublk_user_copy(struct kiocb *iocb, struct iov_iter *iter, int dir)
 	struct ublk_io *io;
 	unsigned data_len;
 	bool is_integrity;
-	bool on_daemon;
 	size_t buf_off;
 	u16 tag, q_id;
 	ssize_t ret;
@@ -4242,20 +4299,13 @@ ublk_user_copy(struct kiocb *iocb, struct iov_iter *iter, int dir)
 		return -EINVAL;
 
 	io = &ubq->ios[tag];
-	on_daemon = current == READ_ONCE(io->task);
-	if (on_daemon) {
-		/* On daemon, io can't be completed concurrently, so skip ref */
-		if (!(io->flags & UBLK_IO_FLAG_OWNED_BY_SRV))
-			return -EINVAL;
-
-		req = io->req;
-		if (!blk_rq_has_data(req))
-			return -EINVAL;
-	} else {
-		req = __ublk_check_and_get_req(ub, q_id, tag, io);
-		if (!req)
-			return -EINVAL;
-	}
+	/*
+	 * A reference is needed on the daemon task too: teardown aborts
+	 * tags while the ublk server is still alive.
+	 */
+	req = __ublk_check_and_get_req(ub, q_id, tag, io);
+	if (!req)
+		return -EINVAL;
 
 	if (is_integrity) {
 		struct blk_integrity *bi = &req->q->limits.integrity;
@@ -4280,8 +4330,7 @@ ublk_user_copy(struct kiocb *iocb, struct iov_iter *iter, int dir)
 		ret = ublk_copy_user_pages(req, buf_off, iter, dir);
 
 out:
-	if (!on_daemon)
-		ublk_put_req_ref(io, req);
+	ublk_put_req_ref(io, req);
 	return ret;
 }
 
@@ -4509,6 +4558,8 @@ static void ublk_debugfs_put_io_flags(struct seq_file *sf, unsigned int flags)
 		seq_puts(sf, "NEED_GET_DATA ");
 	if (flags & UBLK_IO_FLAG_AUTO_BUF_REG)
 		seq_puts(sf, "AUTO_BUF_REG ");
+	if (flags & UBLK_IO_FLAG_REQUEUE_REQ)
+		seq_puts(sf, "REQUEUE_REQ ");
 	if (flags & UBLK_IO_FLAG_CANCELED)
 		seq_puts(sf, "CANCELED ");
 }
