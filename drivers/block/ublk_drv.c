@@ -372,7 +372,7 @@ static void ublk_stop_dev_unlocked(struct ublk_device *ub);
 static bool ublk_try_buf_match(struct ublk_device *ub, struct request *rq,
 				  u32 *buf_idx, u32 *buf_off);
 static void ublk_buf_cleanup(struct ublk_device *ub);
-static void ublk_abort_queue(struct ublk_device *ub, struct ublk_queue *ubq);
+static void ublk_abort_dev(struct ublk_device *ub);
 static int ublk_check_canceling(struct ublk_queue *ubq, struct ublk_io *io);
 static void ublk_batch_abort_tags(struct ublk_device *ub,
 		struct ublk_queue *ubq, const unsigned short *tags,
@@ -1200,7 +1200,7 @@ static inline bool ublk_dev_need_req_ref(const struct ublk_device *ub)
  *     ref-- (UBLK_REFCOUNT_INIT - 1), task_registered_buffers stays 1
  *   - Daemon exit check: sum = (UBLK_REFCOUNT_INIT - 1) + 1 = UBLK_REFCOUNT_INIT
  *   - Sum equals UBLK_REFCOUNT_INIT, then both two counters are zeroed by
- *     ublk_check_and_reset_active_ref(), so ublk_abort_queue() can proceed
+ *     ublk_check_and_reset_active_ref(), so ublk_abort_dev() can proceed
  *     and abort pending requests
  *
  * Batch IO Special Case:
@@ -2794,11 +2794,7 @@ static void ublk_ch_release_work_fn(struct work_struct *work)
 	 * All requests may be inflight, so ->canceling may not be set, set
 	 * it now.
 	 */
-	mutex_lock(&ub->cancel_mutex);
-	ublk_set_canceling(ub, true);
-	for (i = 0; i < ub->dev_info.nr_hw_queues; i++)
-		ublk_abort_queue(ub, ublk_get_queue(ub, i));
-	mutex_unlock(&ub->cancel_mutex);
+	ublk_abort_dev(ub);
 	blk_mq_kick_requeue_list(disk->queue);
 
 	/*
@@ -2983,35 +2979,30 @@ static void ublk_abort_batch_queue(struct ublk_device *ub,
 }
 
 /*
- * Called from ublk char device release handler, when any uring_cmd is
- * done, meantime request queue is "quiesced" since all inflight requests
- * can't be completed because ublk server is dead.
+ * Dispose of one request that del_gendisk() would otherwise wait for.
  *
- * So no one can hold our request IO reference any more, simply ignore the
- * reference, and complete the request immediately
+ * The ublk server can return the tag concurrently, so the claim on
+ * OWNED_BY_SRV decides which side ends the request. A tag still being
+ * dispatched belongs to the dispatcher, which ends it once it sees
+ * ->canceling, so it is left alone here.
  */
-static void ublk_abort_queue(struct ublk_device *ub, struct ublk_queue *ubq)
+static bool ublk_abort_started_rq(struct request *rq, void *data)
 {
-	u16 i;
+	struct ublk_device *ub = data;
+	struct ublk_queue *ubq = rq->mq_hctx->driver_data;
+	struct ublk_io *io = &ubq->ios[rq->tag];
+	bool owned;
 
-	if (ublk_support_batch_io(ubq))
-		ublk_abort_batch_queue(ub, ubq);
+	ublk_io_lock(io);
+	owned = io->flags & UBLK_IO_FLAG_OWNED_BY_SRV;
+	if (owned)
+		io->flags &= ~UBLK_IO_FLAG_OWNED_BY_SRV;
+	ublk_io_unlock(io);
 
-	for (i = 0; i < ubq->q_depth; i++) {
-		struct ublk_io *io = &ubq->ios[i];
-		struct request *req;
-
-		ublk_io_lock(io);
-		if (io->flags & UBLK_IO_FLAG_OWNED_BY_SRV) {
-			io->flags &= ~UBLK_IO_FLAG_OWNED_BY_SRV;
-			req = io->req;
-			ublk_io_unlock(io);
-			/* OWNED_BY_SRV, dispatch reference is held */
-			__ublk_fail_req(ub, io, req, true);
-			continue;
-		}
-		ublk_io_unlock(io);
-	}
+	/* OWNED_BY_SRV, so the dispatch reference is held */
+	if (owned)
+		__ublk_fail_req(ub, io, rq, true);
+	return true;
 }
 
 static void ublk_start_cancel(struct ublk_device *ub)
@@ -3042,6 +3033,29 @@ static void ublk_start_cancel(struct ublk_device *ub)
 out:
 	mutex_unlock(&ub->cancel_mutex);
 	ublk_put_disk(disk);
+}
+
+/*
+ * Dispose of every request the ublk server still owns, with ->canceling
+ * published first so nothing new can appear behind the walk.
+ */
+static void ublk_abort_dev(struct ublk_device *ub)
+{
+	u16 i;
+
+	mutex_lock(&ub->cancel_mutex);
+	ublk_set_canceling(ub, true);
+
+	/* tags queued for dispatch hold no request yet, so drain them first */
+	for (i = 0; i < ub->dev_info.nr_hw_queues; i++) {
+		struct ublk_queue *ubq = ublk_get_queue(ub, i);
+
+		if (ublk_support_batch_io(ubq))
+			ublk_abort_batch_queue(ub, ubq);
+	}
+
+	blk_mq_tagset_busy_iter(&ub->tag_set, ublk_abort_started_rq, ub);
+	mutex_unlock(&ub->cancel_mutex);
 }
 
 static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
@@ -3258,7 +3272,7 @@ static struct gendisk *ublk_detach_disk(struct ublk_device *ub)
 {
 	struct gendisk *disk;
 
-	/* Sync with ublk_abort_queue() by holding the lock */
+	/* Sync with ublk_abort_dev() by holding the lock */
 	spin_lock(&ub->lock);
 	disk = ub->ub_disk;
 	ub->dev_info.state = UBLK_S_DEV_DEAD;
