@@ -5025,6 +5025,8 @@ static void ublk_free_dev_number(struct ublk_device *ub)
 
 static struct {
 	struct dentry *root;
+	/* devices that were deleted but not freed yet */
+	struct dentry *stale;
 } ublk_debugfs;
 
 static const char *ublk_dev_state_name(unsigned int state)
@@ -5241,6 +5243,34 @@ static void ublk_debugfs_dev_init(struct ublk_device *ub)
 	ublk_debugfs_dev_files(ub);
 }
 
+/*
+ * The device number is reused as soon as ublk_remove() releases it, so the
+ * directory named after it cannot stay. Move the device under stale/, which
+ * keeps it readable for as long as anything still holds it.
+ */
+static void ublk_debugfs_dev_quarantine(struct ublk_device *ub)
+{
+	static atomic_t seq = ATOMIC_INIT(0);
+	char name[16];
+
+	if (!ub->debugfs_dir)
+		return;
+
+	debugfs_remove_recursive(ub->debugfs_dir);
+	ub->debugfs_dir = NULL;
+
+	if (!ublk_debugfs.stale)
+		return;
+
+	snprintf(name, sizeof(name), "%u", atomic_inc_return(&seq));
+	ub->debugfs_dir = debugfs_create_dir(name, ublk_debugfs.stale);
+	if (IS_ERR(ub->debugfs_dir)) {
+		ub->debugfs_dir = NULL;
+		return;
+	}
+	ublk_debugfs_dev_files(ub);
+}
+
 static void ublk_debugfs_dev_cleanup(struct ublk_device *ub)
 {
 	debugfs_remove_recursive(ub->debugfs_dir);
@@ -5250,19 +5280,27 @@ static void ublk_debugfs_dev_cleanup(struct ublk_device *ub)
 static void ublk_debugfs_init(void)
 {
 	ublk_debugfs.root = debugfs_create_dir("ublk", NULL);
-	if (IS_ERR(ublk_debugfs.root))
+	if (IS_ERR(ublk_debugfs.root)) {
 		ublk_debugfs.root = NULL;
+		return;
+	}
+
+	ublk_debugfs.stale = debugfs_create_dir("stale", ublk_debugfs.root);
+	if (IS_ERR(ublk_debugfs.stale))
+		ublk_debugfs.stale = NULL;
 }
 
 static void ublk_debugfs_cleanup(void)
 {
 	debugfs_remove_recursive(ublk_debugfs.root);
 	ublk_debugfs.root = NULL;
+	ublk_debugfs.stale = NULL;
 }
 
 #else /* !CONFIG_DEBUG_FS */
 
 static inline void ublk_debugfs_dev_init(struct ublk_device *ub) { }
+static inline void ublk_debugfs_dev_quarantine(struct ublk_device *ub) { }
 static inline void ublk_debugfs_dev_cleanup(struct ublk_device *ub) { }
 static inline void ublk_debugfs_init(void) { }
 static inline void ublk_debugfs_cleanup(void) { }
@@ -5283,7 +5321,6 @@ static void ublk_cdev_rel(struct device *dev)
 	ublk_buf_cleanup(ub);
 	blk_mq_free_tag_set(&ub->tag_set);
 	ublk_deinit_queues(ub);
-	ublk_free_dev_number(ub);
 	mutex_destroy(&ub->mutex);
 	mutex_destroy(&ub->cancel_mutex);
 	kfree(ub);
@@ -5349,6 +5386,13 @@ static void ublk_remove(struct ublk_device *ub)
 
 	ublk_stop_dev(ub);
 	cdev_device_del(&ub->cdev, &ub->cdev_dev);
+	/* before the number, and the directory named after it, are reusable */
+	ublk_debugfs_dev_quarantine(ub);
+	/*
+	 * A ublk server pins the char device with its own parked commands,
+	 * so a reference-based free lets it wait on itself in DEL_DEV.
+	 */
+	ublk_free_dev_number(ub);
 	unprivileged = ub->dev_info.flags & UBLK_F_UNPRIVILEGED_DEV;
 	ublk_put_device(ub);
 
