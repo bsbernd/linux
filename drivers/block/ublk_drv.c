@@ -382,6 +382,8 @@ static inline struct request *__ublk_check_and_get_req(struct ublk_device *ub,
 static void ublk_batch_dispatch(struct ublk_queue *ubq,
 				const struct ublk_batch_io_data *data,
 				struct ublk_batch_fetch_cmd *fcmd);
+static void ublk_abort_batch_queue(struct ublk_device *ub,
+		struct ublk_queue *ubq);
 
 static inline bool ublk_dev_support_batch_io(const struct ublk_device *ub)
 {
@@ -2218,6 +2220,18 @@ static void ublk_batch_tw_cb(struct io_tw_req tw_req, io_tw_token_t tw)
 	};
 
 	WARN_ON_ONCE(pdu->ubq->active_fcmd != fcmd);
+
+	if (unlikely(tw.cancel)) {
+		/*
+		 * The ring is going away and this is the only run this
+		 * command gets: cancellation skips the active fcmd, so
+		 * leaving it parked strands it for good.
+		 */
+		ublk_abort_batch_queue(data.ub, pdu->ubq);
+		ublk_batch_deinit_fetch_buf(pdu->ubq, &data, fcmd,
+					    UBLK_IO_RES_ABORT);
+		return;
+	}
 
 	ublk_batch_dispatch(pdu->ubq, &data, fcmd);
 }
