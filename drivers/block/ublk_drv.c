@@ -4864,7 +4864,6 @@ static void ublk_cdev_rel(struct device *dev)
 	ublk_buf_cleanup(ub);
 	blk_mq_free_tag_set(&ub->tag_set);
 	ublk_deinit_queues(ub);
-	ublk_free_dev_number(ub);
 	mutex_destroy(&ub->mutex);
 	mutex_destroy(&ub->cancel_mutex);
 	kfree(ub);
@@ -4930,6 +4929,11 @@ static void ublk_remove(struct ublk_device *ub)
 
 	ublk_stop_dev(ub);
 	cdev_device_del(&ub->cdev, &ub->cdev_dev);
+	/*
+	 * A ublk server pins the char device with its own parked commands,
+	 * so a reference-based free lets it wait on itself in DEL_DEV.
+	 */
+	ublk_free_dev_number(ub);
 	unprivileged = ub->dev_info.flags & UBLK_F_UNPRIVILEGED_DEV;
 	ublk_put_device(ub);
 
