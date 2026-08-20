@@ -2063,8 +2063,10 @@ static noinline void ublk_batch_dispatch_fail(struct ublk_queue *ubq,
 		int index = -1;
 
 		ublk_io_lock(io);
-		if (io->flags & UBLK_IO_FLAG_AUTO_BUF_REG)
+		if (io->flags & UBLK_IO_FLAG_AUTO_BUF_REG) {
 			index = io->buf.auto_reg.index;
+			io->task_registered_buffers = 0;
+		}
 		io->flags &= ~(UBLK_IO_FLAG_OWNED_BY_SRV | UBLK_IO_FLAG_AUTO_BUF_REG);
 		io->flags |= UBLK_IO_FLAG_ACTIVE | UBLK_IO_FLAG_DISPATCHING;
 		ublk_io_unlock(io);
@@ -2072,6 +2074,8 @@ static noinline void ublk_batch_dispatch_fail(struct ublk_queue *ubq,
 		if (index != -1)
 			io_buffer_unregister_bvec(data->cmd, index,
 					data->issue_flags);
+
+		ublk_reset_req_ref(ubq, io);
 	}
 
 	res = kfifo_in_spinlocked_noirqsave(&ubq->evts_fifo,
