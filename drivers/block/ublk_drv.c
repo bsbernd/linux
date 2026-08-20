@@ -3267,6 +3267,44 @@ static void ublk_wait_tagset_rqs_idle(struct ublk_device *ub)
 	}
 }
 
+#define UBLK_FREEZE_WARN_TIMEOUT_MS	5000
+
+static bool ublk_warn_started_rq(struct request *rq, void *data)
+{
+	struct ublk_device *ub = data;
+	struct ublk_queue *ubq = rq->mq_hctx->driver_data;
+	struct ublk_io *io = &ubq->ios[rq->tag];
+
+	pr_warn("%s: dev %d qid %d tag %d still started: io_flags %x ref %u task_bufs %u task %d\n",
+			__func__, ub->dev_info.dev_id, ubq->q_id, rq->tag,
+			io->flags, refcount_read(&io->ref),
+			io->task_registered_buffers,
+			io->task ? task_pid_nr(io->task) : -1);
+	return true;
+}
+
+/*
+ * del_gendisk() waits forever for a request teardown failed to dispose of,
+ * with nothing naming the tag. Report those tags before entering that wait.
+ */
+static void ublk_warn_started_rqs(struct ublk_device *ub)
+{
+	unsigned int elapsed;
+	bool idle;
+
+	for (elapsed = 0; elapsed < UBLK_FREEZE_WARN_TIMEOUT_MS;
+	     elapsed += UBLK_REQUEUE_DELAY_MS) {
+		idle = true;
+		blk_mq_tagset_busy_iter(&ub->tag_set,
+				ublk_check_inflight_rq, &idle);
+		if (idle)
+			return;
+		msleep(UBLK_REQUEUE_DELAY_MS);
+	}
+
+	blk_mq_tagset_busy_iter(&ub->tag_set, ublk_warn_started_rq, ub);
+}
+
 static void ublk_force_abort_dev(struct ublk_device *ub)
 {
 	u16 i;
@@ -3316,6 +3354,7 @@ static void ublk_stop_dev_unlocked(struct ublk_device *ub)
 	ublk_abort_dev(ub);
 	blk_mq_kick_requeue_list(ub->ub_disk->queue);
 
+	ublk_warn_started_rqs(ub);
 	del_gendisk(ub->ub_disk);
 	disk = ublk_detach_disk(ub);
 	put_disk(disk);
