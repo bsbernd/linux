@@ -5990,27 +5990,34 @@ static bool ublk_try_buf_match(struct ublk_device *ub,
 				   struct request *rq,
 				   u32 *buf_idx, u32 *buf_off)
 {
+	MA_STATE(mas, &ub->buf_tree, 0, ULONG_MAX);
 	struct req_iterator iter;
 	struct bio_vec bv;
 	int index = -1;
 	unsigned long expected_offset = 0;
 	bool first = true;
+	bool matched = false;
 
+	/*
+	 * mas_walk() requires the tree lock or RCU; the queue freeze that
+	 * keeps writers away is invisible to it.
+	 */
+	mas_lock(&mas);
 	rq_for_each_bvec(bv, rq, iter) {
 		unsigned long pfn = page_to_pfn(bv.bv_page);
 		unsigned long end_pfn = pfn +
 			((bv.bv_offset + bv.bv_len - 1) >> PAGE_SHIFT);
 		struct ublk_buf_range *range;
 		unsigned long off;
-		MA_STATE(mas, &ub->buf_tree, pfn, pfn);
 
+		mas_set(&mas, pfn);
 		range = mas_walk(&mas);
 		if (!range)
-			return false;
+			goto unlock;
 
 		/* verify all pages in this bvec fall within the range */
 		if (end_pfn > mas.last)
-			return false;
+			goto unlock;
 
 		off = range->base_offset +
 			(pfn - mas.index) * PAGE_SIZE + bv.bv_offset;
@@ -6019,25 +6026,28 @@ static bool ublk_try_buf_match(struct ublk_device *ub,
 			/* Read-only buffer can't serve READ (kernel writes) */
 			if ((range->flags & UBLK_SHMEM_BUF_READ_ONLY) &&
 			    req_op(rq) != REQ_OP_WRITE)
-				return false;
+				goto unlock;
 			index = range->buf_index;
 			expected_offset = off;
 			*buf_off = off;
 			first = false;
 		} else {
 			if (range->buf_index != index)
-				return false;
+				goto unlock;
 			if (off != expected_offset)
-				return false;
+				goto unlock;
 		}
 		expected_offset += bv.bv_len;
 	}
 
 	if (first)
-		return false;
+		goto unlock;
 
 	*buf_idx = index;
-	return true;
+	matched = true;
+unlock:
+	mas_unlock(&mas);
+	return matched;
 }
 
 static int ublk_ctrl_uring_cmd_permission(struct ublk_device *ub,
