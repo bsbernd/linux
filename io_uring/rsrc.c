@@ -1026,6 +1026,7 @@ int io_buffer_register_bvec(struct io_uring_cmd *cmd, struct request *rq,
 	struct io_rsrc_node *node;
 	struct bio_vec bv;
 	unsigned int nr_bvecs = 0;
+	unsigned int nr_segs;
 	int ret = 0;
 
 	io_ring_submit_lock(ctx, issue_flags);
@@ -1050,7 +1051,8 @@ int io_buffer_register_bvec(struct io_uring_cmd *cmd, struct request *rq,
 	 * blk_rq_nr_phys_segments() may overestimate the number of bvecs
 	 * but avoids needing to iterate over the bvecs
 	 */
-	imu = io_alloc_imu(ctx, blk_rq_nr_phys_segments(rq));
+	nr_segs = blk_rq_nr_phys_segments(rq);
+	imu = io_alloc_imu(ctx, nr_segs);
 	if (!imu) {
 		io_cache_free(&ctx->node_cache, node);
 		ret = -ENOMEM;
@@ -1065,6 +1067,7 @@ int io_buffer_register_bvec(struct io_uring_cmd *cmd, struct request *rq,
 	imu->priv = rq;
 	imu->flags = IO_REGBUF_F_KBUF;
 	imu->dir = 1 << rq_data_dir(rq);
+	imu->nr_bvecs = nr_segs; /* upper limit to avoid UBSAN reports below */
 
 	rq_for_each_bvec(bv, rq, rq_iter)
 		imu->bvec[nr_bvecs++] = bv;
