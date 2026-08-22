@@ -2235,6 +2235,15 @@ static blk_status_t ublk_batch_queue_rq(struct blk_mq_hw_ctx *hctx,
 static inline bool ublk_belong_to_same_batch(const struct ublk_io *io,
 					     const struct ublk_io *io2)
 {
+	/*
+	 * ->cmd shares storage with ->req and only holds a command while
+	 * ACTIVE.  A tag whose command was taken by cancellation, or that has
+	 * not been fetched again after recovery, holds no command to compare.
+	 */
+	if (!(io->flags & UBLK_IO_FLAG_ACTIVE) ||
+	    !(io2->flags & UBLK_IO_FLAG_ACTIVE))
+		return false;
+
 	return (io_uring_cmd_ctx_handle(io->cmd) ==
 		io_uring_cmd_ctx_handle(io2->cmd)) &&
 		(io->task == io2->task);
@@ -2784,6 +2793,7 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	done = !!(io->flags & UBLK_IO_FLAG_CANCELED);
 	if (!done) {
 		io->flags |= UBLK_IO_FLAG_CANCELED;
+		io->flags &= ~UBLK_IO_FLAG_ACTIVE;
 		cmd = io->cmd;
 		io->cmd = NULL;
 	}
