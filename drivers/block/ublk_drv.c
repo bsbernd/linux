@@ -2323,6 +2323,15 @@ static blk_status_t ublk_batch_queue_rq(struct blk_mq_hw_ctx *hctx,
 static inline bool ublk_belong_to_same_batch(const struct ublk_io *io,
 					     const struct ublk_io *io2)
 {
+	/*
+	 * ->cmd shares storage with ->req and only holds a command while
+	 * ACTIVE.  A tag whose command was taken by cancellation, or that has
+	 * not been fetched again after recovery, holds no command to compare.
+	 */
+	if (!(io->flags & UBLK_IO_FLAG_ACTIVE) ||
+	    !(io2->flags & UBLK_IO_FLAG_ACTIVE))
+		return false;
+
 	return (io_uring_cmd_ctx_handle(io->cmd) ==
 		io_uring_cmd_ctx_handle(io2->cmd)) &&
 		(io->task == io2->task);
@@ -2894,6 +2903,7 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	done = !!(io->flags & UBLK_IO_FLAG_CANCELED);
 	if (!done) {
 		io->flags |= UBLK_IO_FLAG_CANCELED;
+		io->flags &= ~UBLK_IO_FLAG_ACTIVE;
 		cmd = io->cmd;
 		io->cmd = NULL;
 	}
@@ -3379,6 +3389,8 @@ static int ublk_check_fetch_buf(const struct ublk_device *ub, __u64 buf_addr)
 static int __ublk_fetch(struct io_uring_cmd *cmd, struct ublk_device *ub,
 			struct ublk_io *io, u16 q_id)
 {
+	struct task_struct *old_task = io->task;
+
 	/* UBLK_IO_FETCH_REQ is only allowed before dev is setup */
 	if (ublk_dev_ready(ub))
 		return -EBUSY;
@@ -3391,10 +3403,18 @@ static int __ublk_fetch(struct io_uring_cmd *cmd, struct ublk_device *ub,
 
 	ublk_fill_io_cmd(io, cmd);
 
-	if (ublk_dev_support_batch_io(ub))
+	if (ublk_dev_support_batch_io(ub)) {
 		WRITE_ONCE(io->task, NULL);
-	else
+	} else {
+		/* the batch caller already holds io->lock */
+		ublk_io_lock(io);
 		WRITE_ONCE(io->task, get_task_struct(current));
+		ublk_io_unlock(io);
+	}
+
+	/* a canceled tag fetched again still holds the old daemon's task */
+	if (old_task)
+		put_task_struct(old_task);
 
 	return 0;
 }
