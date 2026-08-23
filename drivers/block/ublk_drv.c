@@ -119,19 +119,6 @@ struct ublk_batch_fetch_cmd {
 
 struct ublk_uring_cmd_pdu {
 	/*
-	 * Store requests in same batch temporarily for queuing them to
-	 * daemon context.
-	 *
-	 * It should have been stored to request payload, but we do want
-	 * to avoid extra pre-allocation, and uring_cmd payload is always
-	 * free for us
-	 */
-	union {
-		struct request *req;
-		struct request *req_list;
-	};
-
-	/*
 	 * The following two are valid in this cmd whole lifetime, and
 	 * setup in ublk uring_cmd handler
 	 */
@@ -194,6 +181,13 @@ struct ublk_batch_io_data {
  * io_uring will unregister buffer automatically for us during exiting.
  */
 #define UBLK_IO_FLAG_AUTO_BUF_REG 	0x10
+
+/*
+ * Task work is queued on this io's command, so only that callback may
+ * complete it: neither cancellation nor another task work draining the
+ * dispatch list may hand this command over.
+ */
+#define UBLK_IO_FLAG_CMD_TW_PENDING	0x20
 
 /*
  * Teardown chose requeue over completion, but the ublk server still holds a
@@ -266,6 +260,16 @@ struct ublk_queue {
 	spinlock_t		cancel_lock;
 	struct ublk_device *dev;
 	u16 nr_io_ready;
+
+	/*
+	 * Requests handed toward the ublk server but not dispatched yet.
+	 * UBLK_F_BATCH_IO queues tags on evts_fifo instead.
+	 *
+	 * An entry belongs to whoever unlinks it under the lock, so a
+	 * dispatch that never runs cannot strand a request.
+	 */
+	struct rq_list		disp_list;
+	spinlock_t		disp_lock;
 
 	/*
 	 * For supporting UBLK_F_BATCH_IO only.
@@ -382,6 +386,9 @@ static inline struct request *__ublk_check_and_get_req(struct ublk_device *ub,
 static void ublk_batch_dispatch(struct ublk_queue *ubq,
 				const struct ublk_batch_io_data *data,
 				struct ublk_batch_fetch_cmd *fcmd);
+static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
+		unsigned int issue_flags);
+static void ublk_abort_dispatch_queue(struct ublk_queue *ubq);
 static void ublk_abort_batch_queue(struct ublk_device *ub,
 		struct ublk_queue *ubq);
 
@@ -2282,13 +2289,88 @@ again:
 	io_uring_cmd_complete_in_task(new_fcmd->cmd, ublk_batch_tw_cb);
 }
 
+/*
+ * Unlink the entries this task work is allowed to dispatch. The rest are
+ * put back for the task work that may have them:
+ *
+ * - another task's, since a tag is dispatched by its own daemon
+ * - the tag's own, since dispatching hands its command over, and only
+ *   the callback queued on a command may complete it
+ *
+ * @all takes every entry regardless, for the cancel path where no dispatch
+ * follows and leaving one behind would strand its request.
+ */
+static void ublk_take_dispatch_list(struct ublk_queue *ubq, struct rq_list *out,
+				    bool all)
+{
+	struct rq_list others = { };
+	struct request *rq;
+
+	spin_lock(&ubq->disp_lock);
+	while ((rq = rq_list_pop(&ubq->disp_list))) {
+		struct ublk_io *io = &ubq->ios[rq->tag];
+		bool mine;
+
+		/* io->lock nests inside disp_lock, never the other way */
+		ublk_io_lock(io);
+		mine = io->task == current &&
+			!(io->flags & UBLK_IO_FLAG_CMD_TW_PENDING);
+		ublk_io_unlock(io);
+
+		if (all || mine)
+			rq_list_add_tail(out, rq);
+		else
+			rq_list_add_tail(&others, rq);
+	}
+	ubq->disp_list = others;
+	spin_unlock(&ubq->disp_lock);
+}
+
 static void ublk_cmd_tw_cb(struct io_tw_req tw_req, io_tw_token_t tw)
 {
+	unsigned int issue_flags = IO_URING_CMD_TASK_WORK_ISSUE_FLAGS;
 	struct io_uring_cmd *cmd = io_uring_cmd_from_tw(tw_req);
 	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
 	struct ublk_queue *ubq = pdu->ubq;
+	struct ublk_io *io = &ubq->ios[pdu->tag];
+	struct rq_list list = { };
+	struct request *rq;
 
-	ublk_dispatch_req(ubq, pdu->req);
+	if (unlikely(tw.cancel)) {
+		/*
+		 * The ring is going away and this is the only run this command
+		 * gets. It is still ours, so complete it here rather than
+		 * park it again for a cancellation that will not come.
+		 */
+		ublk_io_lock(io);
+		io->flags &= ~UBLK_IO_FLAG_CMD_TW_PENDING;
+		spin_lock(&ubq->cancel_lock);
+		io->flags |= UBLK_IO_FLAG_CANCELED;
+		spin_unlock(&ubq->cancel_lock);
+		ublk_io_unlock(io);
+
+		ublk_take_dispatch_list(ubq, &list, true);
+		while ((rq = rq_list_pop(&list)))
+			__ublk_abort_rq(ubq, rq);
+
+		io_uring_cmd_done(cmd, UBLK_IO_RES_ABORT, issue_flags);
+		return;
+	}
+
+	/*
+	 * Hand the command back before dispatching: the tag it belongs to has
+	 * its own request in the list, and the handover needs ->cmd.
+	 */
+	ublk_io_lock(io);
+	io->cmd = cmd;
+	io->flags |= UBLK_IO_FLAG_ACTIVE;
+	io->flags &= ~UBLK_IO_FLAG_CMD_TW_PENDING;
+	ublk_io_unlock(io);
+
+	ublk_take_dispatch_list(ubq, &list, false);
+
+	while ((rq = rq_list_pop(&list)))
+		ublk_dispatch_req(ubq, rq);
 }
 
 static void ublk_batch_queue_cmd(struct ublk_queue *ubq, struct request *rq, bool last)
@@ -2306,38 +2388,43 @@ static void ublk_batch_queue_cmd(struct ublk_queue *ubq, struct request *rq, boo
 		io_uring_cmd_complete_in_task(fcmd->cmd, ublk_batch_tw_cb);
 }
 
+static void ublk_queue_cmd_list(struct ublk_queue *ubq, struct ublk_io *io,
+				struct rq_list *l)
+{
+	struct io_uring_cmd *cmd;
+	struct request *rq;
+
+	/*
+	 * Take the command out of the tag, so nothing else can reach it once
+	 * the lock is dropped. Cancellation needs ACTIVE and reads ->cmd, so
+	 * it skips this tag until ublk_cmd_tw_cb() hands the command back.
+	 */
+	ublk_io_lock(io);
+	cmd = (io->flags & UBLK_IO_FLAG_ACTIVE) ? io->cmd : NULL;
+	if (cmd) {
+		io->cmd = NULL;
+		io->flags &= ~UBLK_IO_FLAG_ACTIVE;
+		io->flags |= UBLK_IO_FLAG_CMD_TW_PENDING;
+	}
+	ublk_io_unlock(io);
+
+	spin_lock(&ubq->disp_lock);
+	while ((rq = rq_list_pop(l)))
+		rq_list_add_tail(&ubq->disp_list, rq);
+	spin_unlock(&ubq->disp_lock);
+
+	if (cmd)
+		io_uring_cmd_complete_in_task(cmd, ublk_cmd_tw_cb);
+	else
+		ublk_abort_dispatch_queue(ubq);
+}
+
 static void ublk_queue_cmd(struct ublk_queue *ubq, struct request *rq)
 {
-	struct io_uring_cmd *cmd = ubq->ios[rq->tag].cmd;
-	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
+	struct rq_list l = { };
 
-	pdu->req = rq;
-	io_uring_cmd_complete_in_task(cmd, ublk_cmd_tw_cb);
-}
-
-static void ublk_cmd_list_tw_cb(struct io_tw_req tw_req, io_tw_token_t tw)
-{
-	struct io_uring_cmd *cmd = io_uring_cmd_from_tw(tw_req);
-	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
-	struct request *rq = pdu->req_list;
-	struct request *next;
-
-	do {
-		next = rq->rq_next;
-		rq->rq_next = NULL;
-		ublk_dispatch_req(rq->mq_hctx->driver_data, rq);
-		rq = next;
-	} while (rq);
-}
-
-static void ublk_queue_cmd_list(struct ublk_io *io, struct rq_list *l)
-{
-	struct io_uring_cmd *cmd = io->cmd;
-	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
-
-	pdu->req_list = rq_list_peek(l);
-	rq_list_init(l);
-	io_uring_cmd_complete_in_task(cmd, ublk_cmd_list_tw_cb);
+	rq_list_add_tail(&l, rq);
+	ublk_queue_cmd_list(ubq, &ubq->ios[rq->tag], &l);
 }
 
 static enum blk_eh_timer_return ublk_timeout(struct request *rq)
@@ -2495,6 +2582,7 @@ static void ublk_queue_rqs(struct rq_list *rqlist)
 {
 	struct rq_list requeue_list = { };
 	struct rq_list submit_list = { };
+	struct ublk_queue *ubq = NULL;
 	struct ublk_io *io = NULL;
 	struct request *req;
 
@@ -2507,15 +2595,21 @@ static void ublk_queue_rqs(struct rq_list *rqlist)
 			continue;
 		}
 
-		if (io && !ublk_belong_to_same_batch(io, this_io) &&
+		/*
+		 * Each queue has its own dispatch list, so a batch cannot
+		 * span queues even when they share context and task.
+		 */
+		if (io && (this_q != ubq ||
+			   !ublk_belong_to_same_batch(io, this_io)) &&
 				!rq_list_empty(&submit_list))
-			ublk_queue_cmd_list(io, &submit_list);
+			ublk_queue_cmd_list(ubq, io, &submit_list);
+		ubq = this_q;
 		io = this_io;
 		rq_list_add_tail(&submit_list, req);
 	}
 
 	if (!rq_list_empty(&submit_list))
-		ublk_queue_cmd_list(io, &submit_list);
+		ublk_queue_cmd_list(ubq, io, &submit_list);
 	*rqlist = requeue_list;
 }
 
@@ -2976,6 +3070,24 @@ static void ublk_batch_abort_tags(struct ublk_device *ub,
 }
 
 /*
+ * A queued dispatch is reached only by task work that may never run, so
+ * take the requests back here rather than wait for it.
+ */
+static void ublk_abort_dispatch_queue(struct ublk_queue *ubq)
+{
+	struct rq_list list;
+	struct request *rq;
+
+	spin_lock(&ubq->disp_lock);
+	list = ubq->disp_list;
+	rq_list_init(&ubq->disp_list);
+	spin_unlock(&ubq->disp_lock);
+
+	while ((rq = rq_list_pop(&list)))
+		__ublk_abort_rq(ubq, rq);
+}
+
+/*
  * Request tag may just be filled to event kfifo, not get chance to
  * dispatch, abort these requests too
  */
@@ -3067,6 +3179,8 @@ static void ublk_abort_dev(struct ublk_device *ub)
 
 		if (ublk_support_batch_io(ubq))
 			ublk_abort_batch_queue(ub, ubq);
+		else
+			ublk_abort_dispatch_queue(ubq);
 	}
 
 	blk_mq_tagset_busy_iter(&ub->tag_set, ublk_abort_started_rq, ub);
@@ -3078,6 +3192,7 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 {
 	struct ublk_io *io = &ubq->ios[tag];
 	struct io_uring_cmd *cmd = NULL;
+	struct request *req;
 	bool done;
 
 	ublk_io_lock(io);
@@ -3087,6 +3202,18 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	 */
 	if (!(io->flags & UBLK_IO_FLAG_ACTIVE) ||
 	    (io->flags & UBLK_IO_FLAG_DISPATCHING)) {
+		ublk_io_unlock(io);
+		return;
+	}
+
+	/*
+	 * Teardown clears DISPATCHING on the requests it takes back, so that
+	 * flag alone no longer covers a dispatch whose task work is still
+	 * queued.  A started request does: teardown ends it, which un-starts
+	 * it, so this lifts even when the task work is never run.
+	 */
+	req = blk_mq_tag_to_rq(ubq->dev->tag_set.tags[ubq->q_id], tag);
+	if (req && blk_mq_request_started(req) && req->tag == tag) {
 		ublk_io_unlock(io);
 		return;
 	}
@@ -4640,6 +4767,7 @@ static int ublk_init_queue(struct ublk_device *ub, u16 q_id)
 		return -ENOMEM;
 
 	spin_lock_init(&ubq->cancel_lock);
+	spin_lock_init(&ubq->disp_lock);
 	ubq->flags = ub->dev_info.flags;
 	ubq->q_id = q_id;
 	ubq->q_depth = depth;
