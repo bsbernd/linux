@@ -145,8 +145,7 @@ struct ublk_batch_io_data {
  *
  * If the flag is set, the io command is owned by ublk driver, and waited
  * for incoming blk-mq request from the ublk block device. It stays set
- * while a request is being handed over, so io->cmd is valid for as long
- * as any command is parked.
+ * while a request is being handed over.
  */
 #define UBLK_IO_FLAG_ACTIVE	0x01
 
@@ -163,7 +162,7 @@ struct ublk_batch_io_data {
  * not committed yet
  *
  * Exclusive with UBLK_IO_FLAG_ACTIVE: the command has been handed over, so
- * the union holds io->req.
+ * io->cmd is NULL and io->req holds the request.
  */
 #define UBLK_IO_FLAG_OWNED_BY_SRV 0x02
 
@@ -220,12 +219,10 @@ struct ublk_io {
 	unsigned int flags;
 	int res;
 
-	union {
-		/* valid if UBLK_IO_FLAG_ACTIVE is set */
-		struct io_uring_cmd *cmd;
-		/* valid if UBLK_IO_FLAG_OWNED_BY_SRV is set */
-		struct request *req;
-	};
+	/* parked command, NULL once it has been handed over or canceled */
+	struct io_uring_cmd *cmd;
+	/* request handed to the server, NULL once it is committed back */
+	struct request *req;
 
 	struct task_struct *task;
 
@@ -1791,7 +1788,6 @@ static struct io_uring_cmd *__ublk_prep_compl_io_cmd(
 		const struct ublk_queue *ubq, struct ublk_io *io,
 		struct request *req)
 {
-	/* read cmd first because req will overwrite it */
 	struct io_uring_cmd *cmd = io->cmd;
 
 	lockdep_assert_held(&io->lock);
@@ -1805,6 +1801,7 @@ static struct io_uring_cmd *__ublk_prep_compl_io_cmd(
 	/* The server owns the tag once neither local state remains. */
 	io->flags &= ~(UBLK_IO_FLAG_ACTIVE | UBLK_IO_FLAG_DISPATCHING);
 
+	io->cmd = NULL;
 	io->req = req;
 	return cmd;
 }
@@ -3790,6 +3787,7 @@ ublk_fill_io_cmd(struct ublk_io *io, struct io_uring_cmd *cmd)
 {
 	struct request *req = io->req;
 
+	io->req = NULL;
 	io->cmd = cmd;
 	io->flags |= UBLK_IO_FLAG_ACTIVE;
 	/* now this cmd slot is owned by ublk driver */
@@ -4206,8 +4204,8 @@ static inline struct request *__ublk_check_and_get_req(struct ublk_device *ub,
 
 	/*
 	 * can't use io->req in case of concurrent UBLK_IO_COMMIT_AND_FETCH_REQ,
-	 * which would overwrite it with io->cmd. Taking a reference first does
-	 * not help: that overwrite happens before the commit drops its own.
+	 * which clears it. Taking a reference first does not help: it is
+	 * cleared before the commit drops its own reference.
 	 */
 	req = blk_mq_tag_to_rq(ub->tag_set.tags[q_id], tag);
 	if (!req)
