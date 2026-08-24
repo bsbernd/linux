@@ -366,6 +366,7 @@ static bool ublk_try_buf_match(struct ublk_device *ub, struct request *rq,
 				  u32 *buf_idx, u32 *buf_off);
 static void ublk_buf_cleanup(struct ublk_device *ub);
 static void ublk_abort_queue(struct ublk_device *ub, struct ublk_queue *ubq);
+static int ublk_check_canceling(struct ublk_queue *ubq, struct ublk_io *io);
 static inline struct request *__ublk_check_and_get_req(struct ublk_device *ub,
 		u16 q_id, u16 tag, struct ublk_io *io);
 static void ublk_batch_dispatch(struct ublk_queue *ubq,
@@ -1707,8 +1708,22 @@ ublk_auto_buf_reg_fallback(const struct ublk_queue *ubq, u16 tag)
 	iod->op_flags |= UBLK_IO_F_NEED_REG_BUF;
 }
 
+static void ublk_complete_abandoned_cmd(struct ublk_queue *ubq,
+		struct ublk_io *io, struct io_uring_cmd *cmd,
+		unsigned int issue_flags)
+{
+	int ret = ublk_check_canceling(ubq, io);
+
+	if (ret == UBLK_IO_RES_ABORT) {
+		/* io->cmd set to NULL by ublk_check_canceling() */
+		io_uring_cmd_done(cmd, ret, issue_flags);
+	}
+}
+
 enum auto_buf_reg_res {
+	/* registration failed, the request has already been ended */
 	AUTO_BUF_REG_FAIL,
+	/* failed too, but the ublk server registers the buffer itself */
 	AUTO_BUF_REG_FALLBACK,
 	AUTO_BUF_REG_OK,
 };
@@ -1761,7 +1776,7 @@ ublk_auto_buf_register(const struct ublk_queue *ubq, struct request *req,
  *
  * Only called in non-batch context from task work, io->lock not held.
  */
-static void ublk_auto_buf_dispatch(const struct ublk_queue *ubq,
+static void ublk_auto_buf_dispatch(struct ublk_queue *ubq,
 				   struct request *req, struct ublk_io *io,
 				   struct io_uring_cmd *cmd,
 				   unsigned int issue_flags)
@@ -1769,12 +1784,16 @@ static void ublk_auto_buf_dispatch(const struct ublk_queue *ubq,
 	enum auto_buf_reg_res res = ublk_auto_buf_register(ubq, req, io, cmd,
 			issue_flags);
 
-	if (res != AUTO_BUF_REG_FAIL) {
-		ublk_io_lock(io);
-		ublk_auto_buf_io_setup(ubq, req, io, cmd, res);
-		ublk_io_unlock(io);
-		io_uring_cmd_done(cmd, UBLK_IO_RES_OK, issue_flags);
+	/* the request is gone, only the parked command is left */
+	if (res == AUTO_BUF_REG_FAIL) {
+		ublk_complete_abandoned_cmd(ubq, io, cmd, issue_flags);
+		return;
 	}
+
+	ublk_io_lock(io);
+	ublk_auto_buf_io_setup(ubq, req, io, cmd, res);
+	ublk_io_unlock(io);
+	io_uring_cmd_done(cmd, UBLK_IO_RES_OK, issue_flags);
 }
 
 static bool ublk_start_io(const struct ublk_queue *ubq, struct request *req,
@@ -1817,6 +1836,7 @@ static void ublk_dispatch_req(struct ublk_queue *ubq, struct request *req)
 	unsigned int issue_flags = IO_URING_CMD_TASK_WORK_ISSUE_FLAGS;
 	u16 tag = req->tag;
 	struct ublk_io *io = &ubq->ios[tag];
+	struct io_uring_cmd *cmd = io->cmd;
 
 	ublk_setup_iod(ubq, req);
 	pr_devel("%s: complete: qid %d tag %d io_flags %x addr %llx\n",
@@ -1833,7 +1853,14 @@ static void ublk_dispatch_req(struct ublk_queue *ubq, struct request *req)
 	 * (2) current->flags & PF_EXITING.
 	 */
 	if (unlikely(current != io->task || current->flags & PF_EXITING)) {
+		/*
+		 * Handing the request back may get it dispatched again. Only
+		 * ->canceling makes the completion below claim the command,
+		 * and while that is set a re-dispatch is refused and no new
+		 * command can be parked, so cmd cannot change here.
+		 */
 		__ublk_abort_rq(ubq, req);
+		ublk_complete_abandoned_cmd(ubq, io, cmd, issue_flags);
 		return;
 	}
 
@@ -1853,8 +1880,10 @@ static void ublk_dispatch_req(struct ublk_queue *ubq, struct request *req)
 		return;
 	}
 
-	if (!ublk_start_io(ubq, req, io))
+	if (!ublk_start_io(ubq, req, io)) {
+		ublk_complete_abandoned_cmd(ubq, io, cmd, issue_flags);
 		return;
+	}
 
 	if (ublk_support_auto_buf_reg(ubq) && blk_rq_has_data(req)) {
 		ublk_auto_buf_dispatch(ubq, req, io, io->cmd, issue_flags);
