@@ -1319,6 +1319,13 @@ static inline void ublk_init_req_ref(const struct ublk_queue *ubq,
 		refcount_set(&io->ref, UBLK_REFCOUNT_INIT);
 }
 
+static inline void ublk_reset_req_ref(const struct ublk_queue *ubq,
+		struct ublk_io *io)
+{
+	if (ublk_need_req_ref(ubq))
+		refcount_set(&io->ref, 0);
+}
+
 static inline bool ublk_get_req_ref(struct ublk_io *io)
 {
 	return refcount_inc_not_zero(&io->ref);
@@ -1768,13 +1775,17 @@ exit:
 }
 
 /* Claims the union, so the caller must have tested io->flags under the lock */
-static struct io_uring_cmd *__ublk_prep_compl_io_cmd(struct ublk_io *io,
-						     struct request *req)
+static struct io_uring_cmd *__ublk_prep_compl_io_cmd(
+		const struct ublk_queue *ubq, struct ublk_io *io,
+		struct request *req)
 {
 	/* read cmd first because req will overwrite it */
 	struct io_uring_cmd *cmd = io->cmd;
 
 	lockdep_assert_held(&io->lock);
+
+	if (unlikely(READ_ONCE(ubq->canceling)))
+		return NULL;
 
 	/* mark this cmd owned by ublksrv */
 	io->flags |= UBLK_IO_FLAG_OWNED_BY_SRV;
@@ -1786,17 +1797,22 @@ static struct io_uring_cmd *__ublk_prep_compl_io_cmd(struct ublk_io *io,
 	return cmd;
 }
 
-static void ublk_complete_io_cmd(struct ublk_io *io, struct request *req,
-				 int res, unsigned issue_flags)
+static bool ublk_complete_io_cmd(const struct ublk_queue *ubq,
+		struct ublk_io *io, struct request *req, int res,
+		unsigned int issue_flags)
 {
 	struct io_uring_cmd *cmd;
 
 	ublk_io_lock(io);
-	cmd = __ublk_prep_compl_io_cmd(io, req);
+	cmd = __ublk_prep_compl_io_cmd(ubq, io, req);
 	ublk_io_unlock(io);
+
+	if (unlikely(!cmd))
+		return false;
 
 	/* tell ublksrv one io request is coming */
 	io_uring_cmd_done(cmd, res, issue_flags);
+	return true;
 }
 
 #define UBLK_REQUEUE_DELAY_MS	3
@@ -1854,7 +1870,7 @@ enum auto_buf_reg_res {
  *
  * Must be called after ublk_auto_buf_register() is done.
  */
-static void ublk_auto_buf_io_setup(const struct ublk_queue *ubq,
+static bool ublk_auto_buf_io_setup(const struct ublk_queue *ubq,
 				   struct request *req, struct ublk_io *io,
 				   struct io_uring_cmd *cmd,
 				   enum auto_buf_reg_res res)
@@ -1867,7 +1883,33 @@ static void ublk_auto_buf_io_setup(const struct ublk_queue *ubq,
 		io->flags |= UBLK_IO_FLAG_AUTO_BUF_REG;
 	}
 	ublk_init_req_ref(ubq, io);
-	__ublk_prep_compl_io_cmd(io, req);
+	return __ublk_prep_compl_io_cmd(ubq, io, req) != NULL;
+}
+
+/*
+ * Cancellation refused the handover to the server: undo the setup and give
+ * the request back to the block layer. The fetch command stays parked for
+ * the caller to complete.
+ */
+static void ublk_dispatch_refused(struct ublk_queue *ubq,
+		struct request *req, struct ublk_io *io,
+		struct io_uring_cmd *cmd, unsigned int issue_flags)
+{
+	u16 buf_idx = UBLK_INVALID_BUF_IDX;
+
+	ublk_io_lock(io);
+	if (io->flags & UBLK_IO_FLAG_AUTO_BUF_REG) {
+		io->flags &= ~UBLK_IO_FLAG_AUTO_BUF_REG;
+		io->task_registered_buffers = 0;
+		buf_idx = io->buf.auto_reg.index;
+	}
+	ublk_io_unlock(io);
+
+	if (buf_idx != UBLK_INVALID_BUF_IDX)
+		io_buffer_unregister(cmd, buf_idx, issue_flags);
+
+	ublk_reset_req_ref(ubq, io);
+	__ublk_abort_rq(ubq, req);
 }
 
 /* Register request bvec to io_uring for auto buffer registration. */
@@ -1904,6 +1946,7 @@ static void ublk_auto_buf_dispatch(struct ublk_queue *ubq,
 {
 	enum auto_buf_reg_res res = ublk_auto_buf_register(ubq, req, io, cmd,
 			issue_flags);
+	bool published;
 
 	/* the request is gone, only the parked command is left */
 	if (res == AUTO_BUF_REG_FAIL) {
@@ -1912,9 +1955,15 @@ static void ublk_auto_buf_dispatch(struct ublk_queue *ubq,
 	}
 
 	ublk_io_lock(io);
-	ublk_auto_buf_io_setup(ubq, req, io, cmd, res);
+	published = ublk_auto_buf_io_setup(ubq, req, io, cmd, res);
 	ublk_io_unlock(io);
-	io_uring_cmd_done(cmd, UBLK_IO_RES_OK, issue_flags);
+
+	if (unlikely(!published)) {
+		ublk_dispatch_refused(ubq, req, io, cmd, issue_flags);
+		ublk_complete_abandoned_cmd(ubq, io, cmd, issue_flags);
+	} else {
+		io_uring_cmd_done(cmd, UBLK_IO_RES_OK, issue_flags);
+	}
 }
 
 static bool ublk_start_io(const struct ublk_queue *ubq, struct request *req,
@@ -1996,8 +2045,14 @@ static void ublk_dispatch_req(struct ublk_queue *ubq, struct request *req)
 		ublk_io_unlock(io);
 		pr_devel("%s: need get data. qid %d tag %d io_flags %x\n",
 				__func__, ubq->q_id, req->tag, io->flags);
-		ublk_complete_io_cmd(io, req, UBLK_IO_RES_NEED_GET_DATA,
-				     issue_flags);
+		if (unlikely(!ublk_complete_io_cmd(ubq, io, req,
+					UBLK_IO_RES_NEED_GET_DATA, issue_flags))) {
+			ublk_io_lock(io);
+			io->flags &= ~UBLK_IO_FLAG_NEED_GET_DATA;
+			ublk_io_unlock(io);
+			ublk_dispatch_refused(ubq, req, io, cmd, issue_flags);
+			ublk_complete_abandoned_cmd(ubq, io, cmd, issue_flags);
+		}
 		return;
 	}
 
@@ -2010,7 +2065,11 @@ static void ublk_dispatch_req(struct ublk_queue *ubq, struct request *req)
 		ublk_auto_buf_dispatch(ubq, req, io, io->cmd, issue_flags);
 	} else {
 		ublk_init_req_ref(ubq, io);
-		ublk_complete_io_cmd(io, req, UBLK_IO_RES_OK, issue_flags);
+		if (unlikely(!ublk_complete_io_cmd(ubq, io, req,
+						UBLK_IO_RES_OK, issue_flags))) {
+			ublk_dispatch_refused(ubq, req, io, cmd, issue_flags);
+			ublk_complete_abandoned_cmd(ubq, io, cmd, issue_flags);
+		}
 	}
 }
 
@@ -2023,6 +2082,7 @@ static bool __ublk_batch_prep_dispatch(struct ublk_queue *ubq,
 	struct request *req = blk_mq_tag_to_rq(ub->tag_set.tags[ubq->q_id], tag);
 	enum auto_buf_reg_res res = AUTO_BUF_REG_FALLBACK;
 	struct io_uring_cmd *cmd = data->cmd;
+	bool published;
 
 	/*
 	 * data->cmd is the queue's fetch command, shared by every tag in the
@@ -2047,8 +2107,13 @@ static bool __ublk_batch_prep_dispatch(struct ublk_queue *ubq,
 	}
 
 	ublk_io_lock(io);
-	ublk_auto_buf_io_setup(ubq, req, io, cmd, res);
+	published = ublk_auto_buf_io_setup(ubq, req, io, cmd, res);
 	ublk_io_unlock(io);
+
+	if (unlikely(!published)) {
+		ublk_dispatch_refused(ubq, req, io, cmd, data->issue_flags);
+		return false;
+	}
 
 	return true;
 }
@@ -3710,6 +3775,7 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 	u16 tag = READ_ONCE(ub_src->tag);
 	s32 result = READ_ONCE(ub_src->result);
 	u64 addr = READ_ONCE(ub_src->addr); /* unioned with zone_append_lba */
+	struct io_uring_cmd *pub;
 	struct request *req;
 	int ret;
 	bool compl;
@@ -3830,11 +3896,15 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 		io->buf.addr = addr;
 		if (likely(ublk_get_data(ubq, io, req))) {
 			ublk_io_lock(io);
-			__ublk_prep_compl_io_cmd(io, req);
+			pub = __ublk_prep_compl_io_cmd(ubq, io, req);
 			ublk_io_unlock(io);
-			return UBLK_IO_RES_OK;
+			if (likely(pub))
+				return UBLK_IO_RES_OK;
+
+			ublk_dispatch_refused(ubq, req, io, cmd, issue_flags);
+		} else {
+			ublk_undo_dispatch(ubq, io, cmd, issue_flags);
 		}
-		ublk_undo_dispatch(ubq, io, cmd, issue_flags);
 		break;
 	default:
 		goto out;
