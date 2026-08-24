@@ -1689,10 +1689,14 @@ static inline void __ublk_abort_rq(struct ublk_queue *ubq,
 		struct request *rq)
 {
 	/* We cannot process this rq so just requeue it. */
-	if (ublk_nosrv_dev_should_queue_io(ubq->dev))
+	if (ublk_nosrv_dev_should_queue_io(ubq->dev)) {
 		blk_mq_requeue_request(rq, false);
-	else
+		if (unlikely(READ_ONCE(ubq->force_abort)))
+			blk_mq_delay_kick_requeue_list(rq->q,
+					UBLK_REQUEUE_DELAY_MS);
+	} else {
 		ublk_end_request(rq, BLK_STS_IOERR);
+	}
 }
 
 static void
@@ -2929,7 +2933,7 @@ static void ublk_batch_cancel_queue(struct ublk_queue *ubq)
 	LIST_HEAD(fcmd_list);
 
 	spin_lock(&ubq->evts_lock);
-	ubq->force_abort = true;
+	WRITE_ONCE(ubq->force_abort, true);
 	list_splice_init(&ubq->fcmd_head, &fcmd_list);
 	fcmd = READ_ONCE(ubq->active_fcmd);
 	if (fcmd)
@@ -3066,7 +3070,7 @@ static void ublk_force_abort_dev(struct ublk_device *ub)
 		ublk_wait_tagset_rqs_idle(ub);
 
 	for (i = 0; i < ub->dev_info.nr_hw_queues; i++)
-		ublk_get_queue(ub, i)->force_abort = true;
+		WRITE_ONCE(ublk_get_queue(ub, i)->force_abort, true);
 	blk_mq_unquiesce_queue(ub->ub_disk->queue);
 	/* We may have requeued some rqs in ublk_quiesce_queue() */
 	blk_mq_kick_requeue_list(ub->ub_disk->queue);
