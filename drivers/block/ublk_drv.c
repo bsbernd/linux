@@ -1919,7 +1919,9 @@ static void ublk_dispatch_req(struct ublk_queue *ubq, struct request *req)
 		 * so immediately pass UBLK_IO_RES_NEED_GET_DATA to ublksrv
 		 * and notify it.
 		 */
+		ublk_io_lock(io);
 		io->flags |= UBLK_IO_FLAG_NEED_GET_DATA;
+		ublk_io_unlock(io);
 		pr_devel("%s: need get data. qid %d tag %d io_flags %x\n",
 				__func__, ubq->q_id, req->tag, io->flags);
 		ublk_complete_io_cmd(io, req, UBLK_IO_RES_NEED_GET_DATA,
@@ -3336,8 +3338,10 @@ static inline void ublk_apply_io_buf(const struct ublk_device *ub,
 				     u16 *buf_idx)
 {
 	if (ublk_dev_support_auto_buf_reg(ub)) {
+		ublk_io_lock(io);
 		ublk_clear_auto_buf_reg(io, cmd, buf_idx);
 		io->buf.auto_reg = *auto_buf;
+		ublk_io_unlock(io);
 	} else {
 		io->buf.addr = buf_addr;
 	}
@@ -3538,8 +3542,11 @@ static int ublk_fetch(struct io_uring_cmd *cmd, struct ublk_device *ub,
 	 */
 	mutex_lock(&ub->mutex);
 	ret = ublk_validate_io_buf(ub, cmd, &auto_buf);
-	if (!ret)
+	if (!ret) {
+		ublk_io_lock(io);
 		ret = __ublk_fetch(cmd, ub, io, q_id);
+		ublk_io_unlock(io);
+	}
 	if (!ret) {
 		ublk_apply_io_buf(ub, io, cmd, buf_addr, &auto_buf, NULL);
 		ublk_mark_io_ready(ub, q_id, io);
@@ -3580,7 +3587,9 @@ static bool ublk_get_data(const struct ublk_queue *ubq, struct ublk_io *io,
 	 * so clear UBLK_IO_FLAG_NEED_GET_DATA now and just
 	 * do the copy work.
 	 */
+	ublk_io_lock(io);
 	io->flags &= ~UBLK_IO_FLAG_NEED_GET_DATA;
+	ublk_io_unlock(io);
 	/* update iod->addr because ublksrv may have passed a new io buffer */
 	ublk_get_iod(ubq, req->tag)->addr = io->buf.addr;
 	pr_devel("%s: update iod->addr: qid %d tag %d io_flags %x addr %llx\n",
