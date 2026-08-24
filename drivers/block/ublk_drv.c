@@ -157,19 +157,26 @@ struct ublk_batch_io_data {
  * io command is active: sqe cmd is received, and its cqe isn't done
  *
  * If the flag is set, the io command is owned by ublk driver, and waited
- * for incoming blk-mq request from the ublk block device.
- *
- * If the flag is cleared, the io command will be completed, and owned by
- * ublk server.
+ * for incoming blk-mq request from the ublk block device. It stays set
+ * while a request is being handed over, so io->cmd is valid for as long
+ * as any command is parked.
  */
 #define UBLK_IO_FLAG_ACTIVE	0x01
+
+/*
+ * A blk-mq request is being handed to the server. Set alongside
+ * UBLK_IO_FLAG_ACTIVE, and it makes the dispatcher the sole owner of both
+ * the command and the request for that interval: cancellation skips the
+ * tag and the dispatcher completes the command itself.
+ */
+#define UBLK_IO_FLAG_DISPATCHING	0x04
 
 /*
  * IO command is completed via cqe, and it is being handled by ublksrv, and
  * not committed yet
  *
- * Basically exclusively with UBLK_IO_FLAG_ACTIVE, so can be served for
- * cross verification
+ * Exclusive with UBLK_IO_FLAG_ACTIVE: the command has been handed over, so
+ * the union holds io->req.
  */
 #define UBLK_IO_FLAG_OWNED_BY_SRV 0x02
 
@@ -471,6 +478,37 @@ static inline void ublk_io_lock(struct ublk_io *io)
 static inline void ublk_io_unlock(struct ublk_io *io)
 {
 	spin_unlock(&io->lock);
+}
+
+/* Hand the tag back: the command stays parked, so ACTIVE is untouched. */
+static void ublk_clear_dispatching(struct ublk_io *io)
+{
+	ublk_io_lock(io);
+	io->flags &= ~UBLK_IO_FLAG_DISPATCHING;
+	ublk_io_unlock(io);
+}
+
+/*
+ * Leave the dispatch, settling the parked command if cancellation is running.
+ *
+ * ublk_cancel_cmd() skips a tag carrying UBLK_IO_FLAG_DISPATCHING because the
+ * dispatch owns the command, and the walk visits each tag once. Handing the
+ * tag back without taking the command would leave it to nobody, so every exit
+ * from the state does it here rather than leaving it to the caller.
+ */
+static void ublk_undo_dispatch(struct ublk_queue *ubq, struct ublk_io *io,
+			       struct io_uring_cmd *cmd,
+			       unsigned int issue_flags)
+{
+	int ret;
+
+	ublk_clear_dispatching(io);
+
+	ret = ublk_check_canceling(ubq, io);
+	if (ret == UBLK_IO_RES_ABORT) {
+		/* io->cmd set to NULL by ublk_check_canceling() */
+		io_uring_cmd_done(cmd, ret, issue_flags);
+	}
 }
 
 /* Initialize the event queue */
@@ -1741,11 +1779,8 @@ static struct io_uring_cmd *__ublk_prep_compl_io_cmd(struct ublk_io *io,
 	/* mark this cmd owned by ublksrv */
 	io->flags |= UBLK_IO_FLAG_OWNED_BY_SRV;
 
-	/*
-	 * clear ACTIVE since we are done with this sqe/cmd slot
-	 * We can only accept io cmd in case of being not active.
-	 */
-	io->flags &= ~UBLK_IO_FLAG_ACTIVE;
+	/* The server owns the tag once neither local state remains. */
+	io->flags &= ~(UBLK_IO_FLAG_ACTIVE | UBLK_IO_FLAG_DISPATCHING);
 
 	io->req = req;
 	return cmd;
@@ -1769,6 +1804,12 @@ static void ublk_complete_io_cmd(struct ublk_io *io, struct request *req,
 static inline void __ublk_abort_rq(struct ublk_queue *ubq,
 		struct request *rq)
 {
+	/*
+	 * No command to settle here: the caller that dispatched completes it
+	 * itself, and the queue_rq path never reached a dispatch.
+	 */
+	ublk_clear_dispatching(&ubq->ios[rq->tag]);
+
 	/* We cannot process this rq so just requeue it. */
 	if (ublk_nosrv_dev_should_queue_io(ubq->dev)) {
 		blk_mq_requeue_request(rq, false);
@@ -1866,7 +1907,7 @@ static void ublk_auto_buf_dispatch(struct ublk_queue *ubq,
 
 	/* the request is gone, only the parked command is left */
 	if (res == AUTO_BUF_REG_FAIL) {
-		ublk_complete_abandoned_cmd(ubq, io, cmd, issue_flags);
+		ublk_undo_dispatch(ubq, io, cmd, issue_flags);
 		return;
 	}
 
@@ -1961,7 +2002,7 @@ static void ublk_dispatch_req(struct ublk_queue *ubq, struct request *req)
 	}
 
 	if (!ublk_start_io(ubq, req, io)) {
-		ublk_complete_abandoned_cmd(ubq, io, cmd, issue_flags);
+		ublk_undo_dispatch(ubq, io, cmd, issue_flags);
 		return;
 	}
 
@@ -1983,16 +2024,26 @@ static bool __ublk_batch_prep_dispatch(struct ublk_queue *ubq,
 	enum auto_buf_reg_res res = AUTO_BUF_REG_FALLBACK;
 	struct io_uring_cmd *cmd = data->cmd;
 
+	/*
+	 * data->cmd is the queue's fetch command, shared by every tag in the
+	 * batch, so there is no per-tag parked command to settle here: the
+	 * tag goes back on ubq->evts_fifo and ublk_batch_cancel_queue() ends
+	 * the fetch command itself.
+	 */
 	ublk_setup_iod(ubq, req);
-	if (!ublk_start_io(ubq, req, io))
+	if (!ublk_start_io(ubq, req, io)) {
+		ublk_clear_dispatching(io);
 		return false;
+	}
 
 	if (ublk_support_auto_buf_reg(ubq) && blk_rq_has_data(req)) {
 		res = ublk_auto_buf_register(ubq, req, io, cmd,
 				data->issue_flags);
 
-		if (res == AUTO_BUF_REG_FAIL)
+		if (res == AUTO_BUF_REG_FAIL) {
+			ublk_clear_dispatching(io);
 			return false;
+		}
 	}
 
 	ublk_io_lock(io);
@@ -2061,7 +2112,7 @@ static noinline void ublk_batch_dispatch_fail(struct ublk_queue *ubq,
 		if (io->flags & UBLK_IO_FLAG_AUTO_BUF_REG)
 			index = io->buf.auto_reg.index;
 		io->flags &= ~(UBLK_IO_FLAG_OWNED_BY_SRV | UBLK_IO_FLAG_AUTO_BUF_REG);
-		io->flags |= UBLK_IO_FLAG_ACTIVE;
+		io->flags |= UBLK_IO_FLAG_ACTIVE | UBLK_IO_FLAG_DISPATCHING;
 		ublk_io_unlock(io);
 
 		if (index != -1)
@@ -2303,6 +2354,8 @@ static enum blk_eh_timer_return ublk_timeout(struct request *rq)
 static blk_status_t ublk_prep_req(struct ublk_queue *ubq, struct request *rq,
 				  bool check_cancel)
 {
+	struct ublk_io *io = &ubq->ios[rq->tag];
+
 	if (unlikely(READ_ONCE(ubq->fail_io)))
 		return BLK_STS_TARGET;
 
@@ -2326,7 +2379,10 @@ static blk_status_t ublk_prep_req(struct ublk_queue *ubq, struct request *rq,
 	if (unlikely(!ublk_validate_req(ubq, rq)))
 		return BLK_STS_IOERR;
 
+	ublk_io_lock(io);
+	io->flags |= UBLK_IO_FLAG_DISPATCHING;
 	blk_mq_start_request(rq);
+	ublk_io_unlock(io);
 	return BLK_STS_OK;
 }
 
@@ -2984,10 +3040,10 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	struct ublk_io *io = &ubq->ios[tag];
 	struct ublk_device *ub = ubq->dev;
 	struct io_uring_cmd *cmd = NULL;
-	struct request *req;
 	bool done;
 
 	ublk_io_lock(io);
+	/* OWNED_BY_SRV holds no command */
 	if (!(io->flags & UBLK_IO_FLAG_ACTIVE)) {
 		ublk_io_unlock(io);
 		ublk_td_count(ub, cancel_skip_owner);
@@ -2995,17 +3051,10 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	}
 
 	/*
-	 * Don't try to cancel this command if the request is started for
-	 * avoiding race between io_uring_cmd_done() and
-	 * io_uring_cmd_complete_in_task().
-	 *
-	 * Either the started request will be aborted via __ublk_abort_rq(),
-	 * then this uring_cmd is canceled next time, or it will be done in
-	 * task work function ublk_dispatch_req() because io_uring guarantees
-	 * that ublk_dispatch_req() is always called
+	 * A dispatch in flight owns the command it is handing over, so it
+	 * completes that itself.
 	 */
-	req = blk_mq_tag_to_rq(ub->tag_set.tags[ubq->q_id], tag);
-	if (req && blk_mq_request_started(req) && req->tag == tag) {
+	if (io->flags & UBLK_IO_FLAG_DISPATCHING) {
 		ublk_io_unlock(io);
 		ublk_td_count(ub, cancel_skip_started);
 		return;
@@ -3762,6 +3811,7 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 			goto out;
 		}
 		req = ublk_fill_io_cmd(io, cmd);
+		io->flags |= UBLK_IO_FLAG_DISPATCHING;
 		ublk_io_unlock(io);
 		io->buf.addr = addr;
 		if (likely(ublk_get_data(ubq, io, req))) {
@@ -3770,6 +3820,7 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 			ublk_io_unlock(io);
 			return UBLK_IO_RES_OK;
 		}
+		ublk_undo_dispatch(ubq, io, cmd, issue_flags);
 		break;
 	default:
 		goto out;
@@ -4641,6 +4692,8 @@ static void ublk_debugfs_put_io_flags(struct seq_file *sf, unsigned int flags)
 		seq_puts(sf, "ACTIVE ");
 	if (flags & UBLK_IO_FLAG_OWNED_BY_SRV)
 		seq_puts(sf, "OWNED_BY_SRV ");
+	if (flags & UBLK_IO_FLAG_DISPATCHING)
+		seq_puts(sf, "DISPATCHING ");
 	if (flags & UBLK_IO_FLAG_NEED_GET_DATA)
 		seq_puts(sf, "NEED_GET_DATA ");
 	if (flags & UBLK_IO_FLAG_AUTO_BUF_REG)
