@@ -48,6 +48,8 @@
 #include <linux/blk-integrity.h>
 #include <linux/maple_tree.h>
 #include <linux/xarray.h>
+#include <linux/debugfs.h>
+#include <linux/seq_file.h>
 #include <uapi/linux/fs.h>
 #include <uapi/linux/ublk_cmd.h>
 
@@ -344,6 +346,10 @@ struct ublk_device {
 	/* shared memory zero copy */
 	struct maple_tree	buf_tree;
 	struct ida		buf_ida;
+
+#ifdef CONFIG_DEBUG_FS
+	struct dentry		*debugfs_dir;
+#endif
 
 	struct ublk_queue       *queues[];
 };
@@ -4319,9 +4325,196 @@ static void ublk_free_dev_number(struct ublk_device *ub)
 	spin_unlock(&ublk_idr_lock);
 }
 
+#ifdef CONFIG_DEBUG_FS
+
+static struct {
+	struct dentry *root;
+} ublk_debugfs;
+
+static const char *ublk_dev_state_name(unsigned int state)
+{
+	switch (state) {
+	case UBLK_S_DEV_DEAD:
+		return "DEAD";
+	case UBLK_S_DEV_LIVE:
+		return "LIVE";
+	case UBLK_S_DEV_QUIESCED:
+		return "QUIESCED";
+	case UBLK_S_DEV_FAIL_IO:
+		return "FAIL_IO";
+	default:
+		return "?";
+	}
+}
+
+static void ublk_debugfs_put_io_flags(struct seq_file *sf, unsigned int flags)
+{
+	if (!flags) {
+		seq_puts(sf, "-");
+		return;
+	}
+	if (flags & UBLK_IO_FLAG_ACTIVE)
+		seq_puts(sf, "ACTIVE ");
+	if (flags & UBLK_IO_FLAG_OWNED_BY_SRV)
+		seq_puts(sf, "OWNED_BY_SRV ");
+	if (flags & UBLK_IO_FLAG_NEED_GET_DATA)
+		seq_puts(sf, "NEED_GET_DATA ");
+	if (flags & UBLK_IO_FLAG_AUTO_BUF_REG)
+		seq_puts(sf, "AUTO_BUF_REG ");
+	if (flags & UBLK_IO_FLAG_CANCELED)
+		seq_puts(sf, "CANCELED ");
+}
+
+static int ublk_debugfs_dev_state_show(struct seq_file *sf, void *priv)
+{
+	struct ublk_device *ub = sf->private;
+	u16 i;
+
+	seq_printf(sf, "dev_id: %u\n", ub->dev_info.dev_id);
+	seq_printf(sf, "state: %s\n",
+		   ublk_dev_state_name(ub->dev_info.state));
+	seq_printf(sf, "flags: 0x%llx\n", ub->dev_info.flags);
+	seq_printf(sf, "nr_hw_queues: %u\n", ub->dev_info.nr_hw_queues);
+	seq_printf(sf, "queue_depth: %u\n", ub->dev_info.queue_depth);
+	seq_printf(sf, "ublksrv_pid: %d\n", ub->dev_info.ublksrv_pid);
+	seq_printf(sf, "ublksrv_tgid: %d\n", ub->ublksrv_tgid);
+	seq_printf(sf, "ub_state: 0x%lx open %d used %d deleted %d\n",
+		   ub->state,
+		   test_bit(UB_STATE_OPEN, &ub->state),
+		   test_bit(UB_STATE_USED, &ub->state),
+		   test_bit(UB_STATE_DELETED, &ub->state));
+	seq_printf(sf, "canceling: %d\n", ub->canceling);
+	seq_printf(sf, "ub_disk: %d\n", !!READ_ONCE(ub->ub_disk));
+	/* a device that will not go away is one nobody dropped */
+	seq_printf(sf, "dev_refcount: %u\n", kref_read(&ub->cdev_dev.kobj.kref));
+
+	for (i = 0; i < ub->dev_info.nr_hw_queues; i++) {
+		struct ublk_queue *ubq = ublk_get_queue(ub, i);
+
+		if (!ubq)
+			continue;
+
+		seq_printf(sf, "queue %u: depth %u canceling %d force_abort %d fail_io %d nr_io_ready %u\n",
+			   ubq->q_id, ubq->q_depth, ubq->canceling,
+			   ubq->force_abort, ubq->fail_io, ubq->nr_io_ready);
+	}
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(ublk_debugfs_dev_state);
+
+static int ublk_debugfs_tags_show(struct seq_file *sf, void *priv)
+{
+	struct ublk_device *ub = sf->private;
+	u16 i, tag;
+
+	for (i = 0; i < ub->dev_info.nr_hw_queues; i++) {
+		struct ublk_queue *ubq = ublk_get_queue(ub, i);
+		struct blk_mq_tags *tags = ub->tag_set.tags[i];
+
+		if (!ubq)
+			continue;
+
+		seq_printf(sf, "queue %u:\n", ubq->q_id);
+
+		for (tag = 0; tag < ubq->q_depth; tag++) {
+			struct ublk_io *io = &ubq->ios[tag];
+			struct io_uring_cmd *cmd;
+			struct request *req, *srv_req;
+			unsigned int flags, registered;
+			int refs, pid;
+			bool started;
+
+			/* seq_printf() may sleep, so copy and print after */
+			ublk_io_lock(io);
+			flags = io->flags;
+			cmd = io->cmd;
+			srv_req = io->req;
+			refs = refcount_read(&io->ref);
+			registered = io->task_registered_buffers;
+			pid = io->task ? task_pid_nr(io->task) : -1;
+			ublk_io_unlock(io);
+
+			req = tags ? blk_mq_tag_to_rq(tags, tag) : NULL;
+			started = req && blk_mq_request_started(req) &&
+				req->tag == tag;
+
+			/* an untouched tag says nothing */
+			if (!flags && !started)
+				continue;
+
+			seq_printf(sf, "  tag %3u flags 0x%08x ", tag, flags);
+			ublk_debugfs_put_io_flags(sf, flags);
+			seq_printf(sf, " cmd %p req %p ref %d reg_bufs %u task %d started %d\n",
+				   cmd, srv_req, refs, registered, pid,
+				   started);
+		}
+	}
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(ublk_debugfs_tags);
+
+static void ublk_debugfs_dev_files(struct ublk_device *ub)
+{
+	debugfs_create_file("dev_state", 0444, ub->debugfs_dir, ub,
+			    &ublk_debugfs_dev_state_fops);
+	debugfs_create_file("tags", 0444, ub->debugfs_dir, ub,
+			    &ublk_debugfs_tags_fops);
+}
+
+static void ublk_debugfs_dev_init(struct ublk_device *ub)
+{
+	char name[16];
+
+	if (!ublk_debugfs.root)
+		return;
+
+	snprintf(name, sizeof(name), "%u", ub->dev_info.dev_id);
+	ub->debugfs_dir = debugfs_create_dir(name, ublk_debugfs.root);
+	if (IS_ERR(ub->debugfs_dir)) {
+		ub->debugfs_dir = NULL;
+		return;
+	}
+	ublk_debugfs_dev_files(ub);
+}
+
+static void ublk_debugfs_dev_cleanup(struct ublk_device *ub)
+{
+	debugfs_remove_recursive(ub->debugfs_dir);
+	ub->debugfs_dir = NULL;
+}
+
+static void ublk_debugfs_init(void)
+{
+	ublk_debugfs.root = debugfs_create_dir("ublk", NULL);
+	if (IS_ERR(ublk_debugfs.root))
+		ublk_debugfs.root = NULL;
+}
+
+static void ublk_debugfs_cleanup(void)
+{
+	debugfs_remove_recursive(ublk_debugfs.root);
+	ublk_debugfs.root = NULL;
+}
+
+#else /* !CONFIG_DEBUG_FS */
+
+static inline void ublk_debugfs_dev_init(struct ublk_device *ub) { }
+static inline void ublk_debugfs_dev_cleanup(struct ublk_device *ub) { }
+static inline void ublk_debugfs_init(void) { }
+static inline void ublk_debugfs_cleanup(void) { }
+
+#endif /* CONFIG_DEBUG_FS */
+
 static void ublk_cdev_rel(struct device *dev)
 {
 	struct ublk_device *ub = container_of(dev, struct ublk_device, cdev_dev);
+
+	/*
+	 * Before the queues and the tag set the files report on are freed.
+	 * debugfs_remove_recursive() waits out readers already inside a file
+	 * operation and refuses any that start later.
+	 */
+	ublk_debugfs_dev_cleanup(ub);
 
 	ublk_buf_cleanup(ub);
 	blk_mq_free_tag_set(&ub->tag_set);
@@ -4851,6 +5044,8 @@ static int ublk_ctrl_add_dev(const struct ublksrv_ctrl_cmd *header)
 	 * ublk_add_chdev() will cleanup everything if it fails.
 	 */
 	ret = ublk_add_chdev(ub);
+	if (!ret)
+		ublk_debugfs_dev_init(ub);
 	goto out_unlock;
 
 out_deinit_queues:
@@ -5917,6 +6112,8 @@ static int __init ublk_init(void)
 	if (ret)
 		goto free_chrdev_region;
 
+	ublk_debugfs_init();
+
 	return 0;
 
 free_chrdev_region:
@@ -5933,6 +6130,8 @@ static void __exit ublk_exit(void)
 
 	idr_for_each_entry(&ublk_index_idr, ub, id)
 		ublk_remove(ub);
+
+	ublk_debugfs_cleanup();
 
 	class_unregister(&ublk_chr_class);
 	misc_deregister(&ublk_misc);
