@@ -2165,39 +2165,80 @@ static noinline void ublk_batch_dispatch_fail(struct ublk_queue *ubq,
 		const struct ublk_batch_io_data *data,
 		unsigned short *tag_buf, size_t len, int ret)
 {
-	int i, res;
+	bool canceling = false;
+	unsigned int recovered = 0;
+	int i;
 
 	/*
 	 * Undo prep state for all IOs since userspace never received them.
 	 * This restores IOs to pre-prepared state so they can be cleanly
 	 * re-prepared when tags are pulled from FIFO again.
+	 *
+	 * Teardown may have taken a prepared tag already, so only reclaim
+	 * one that still carries OWNED_BY_SRV.
 	 */
 	for (i = 0; i < len; i++) {
 		struct ublk_io *io = &ubq->ios[tag_buf[i]];
+		bool reclaimed = false;
 		int index = -1;
 
 		ublk_io_lock(io);
 		if (io->flags & UBLK_IO_FLAG_AUTO_BUF_REG) {
 			index = io->buf.auto_reg.index;
-			io->task_registered_buffers = 0;
+			io->flags &= ~UBLK_IO_FLAG_AUTO_BUF_REG;
+			/*
+			 * Teardown's own relinquish subtracts this, so only
+			 * zero it on the tag this side keeps.
+			 */
+			if (io->flags & UBLK_IO_FLAG_OWNED_BY_SRV)
+				io->task_registered_buffers = 0;
 		}
-		io->flags &= ~(UBLK_IO_FLAG_OWNED_BY_SRV | UBLK_IO_FLAG_AUTO_BUF_REG);
-		io->flags |= UBLK_IO_FLAG_ACTIVE | UBLK_IO_FLAG_DISPATCHING;
+		if (io->flags & UBLK_IO_FLAG_OWNED_BY_SRV) {
+			io->flags &= ~UBLK_IO_FLAG_OWNED_BY_SRV;
+			io->flags |= UBLK_IO_FLAG_ACTIVE | UBLK_IO_FLAG_DISPATCHING;
+			reclaimed = true;
+		}
 		ublk_io_unlock(io);
 
+		/* the failed handoff registered it either way */
 		if (index != -1)
 			io_buffer_unregister(data->cmd, index,
 					data->issue_flags);
 
+		if (!reclaimed) {
+			tag_buf[i] = UBLK_BATCH_IO_UNUSED_TAG;
+			continue;
+		}
+
 		ublk_reset_req_ref(ubq, io);
 	}
 
-	res = kfifo_in_spinlocked_noirqsave(&ubq->evts_fifo,
-		tag_buf, len, &ubq->evts_lock);
+	/*
+	 * The filter in __ublk_batch_dispatch() ran before the loop above,
+	 * so tags dropped there are still in the buffer.
+	 */
+	len = ublk_filter_unused_tags(tag_buf, len);
+	if (!len)
+		return;
 
-	pr_warn_ratelimited("%s: copy tags or post CQE failure, move back "
-			"tags(%d %zu) ret %d\n", __func__, res, len,
-			ret);
+	/*
+	 * One evts_lock transaction: an insert that sees ->canceling false is
+	 * on the fifo before the drain pops the last entry, so it cannot be
+	 * stranded behind a drain that has already finished.
+	 */
+	spin_lock(&ubq->evts_lock);
+	canceling = READ_ONCE(ubq->canceling);
+	if (!canceling)
+		recovered = kfifo_in(&ubq->evts_fifo, tag_buf, len);
+	spin_unlock(&ubq->evts_lock);
+
+	if (unlikely(canceling)) {
+		ublk_batch_abort_tags(data->ub, ubq, tag_buf, len);
+		recovered = len;
+	}
+
+	pr_warn_ratelimited("%s: copy tags or post CQE failure, recover tags(%u %zu) ret %d\n",
+			__func__, recovered, len, ret);
 }
 
 #define MAX_NR_TAG 128
@@ -2799,7 +2840,11 @@ static void ublk_set_canceling(struct ublk_device *ub, bool canceling)
 	for (i = 0; i < ub->dev_info.nr_hw_queues; i++) {
 		struct ublk_queue *ubq = ublk_get_queue(ub, i);
 
+		if (ublk_support_batch_io(ubq))
+			spin_lock(&ubq->evts_lock);
 		WRITE_ONCE(ubq->canceling, canceling);
+		if (ublk_support_batch_io(ubq))
+			spin_unlock(&ubq->evts_lock);
 	}
 }
 
