@@ -3090,6 +3090,9 @@ static void ublk_abort_queue(struct ublk_device *ub, struct ublk_queue *ubq)
 {
 	u16 i;
 
+	if (ublk_support_batch_io(ubq))
+		ublk_abort_batch_queue(ub, ubq);
+
 	for (i = 0; i < ubq->q_depth; i++) {
 		struct ublk_io *io = &ubq->ios[i];
 		struct request *req;
@@ -3105,9 +3108,6 @@ static void ublk_abort_queue(struct ublk_device *ub, struct ublk_queue *ubq)
 		}
 		ublk_io_unlock(io);
 	}
-
-	if (ublk_support_batch_io(ubq))
-		ublk_abort_batch_queue(ub, ubq);
 }
 
 static void ublk_start_cancel(struct ublk_device *ub)
