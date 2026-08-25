@@ -277,9 +277,9 @@ struct ublk_queue {
 	 * There are multiple writer from ublk_queue_rq() or ublk_queue_rqs(),
 	 * so lock is required for storing request tag to fifo
 	 *
-	 * Make sure just one reader for fetching request from task work
-	 * function to ublk server, so no need to grab the lock in reader
-	 * side.
+	 * Teardown reads it too, concurrently with the task work function
+	 * that feeds the ublk server, so the lock is required on both
+	 * sides.
 	 *
 	 * Batch I/O State Management:
 	 *
@@ -298,7 +298,7 @@ struct ublk_queue {
 	 * Key Invariants:
 	 * - At most one active_fcmd at any time (single reader)
 	 * - active_fcmd is always from fcmd_head list when non-NULL
-	 * - evts_fifo can be read locklessly by the single active reader
+	 * - evts_fifo readers take evts_lock: teardown drains it concurrently
 	 * - All state transitions require evts_lock protection
 	 * - Multiple writers to evts_fifo require lock protection
 	 */
@@ -454,6 +454,9 @@ static bool ublk_try_buf_match(struct ublk_device *ub, struct request *rq,
 static void ublk_buf_cleanup(struct ublk_device *ub);
 static void ublk_abort_queue(struct ublk_device *ub, struct ublk_queue *ubq);
 static int ublk_check_canceling(struct ublk_queue *ubq, struct ublk_io *io);
+static void ublk_batch_abort_tags(struct ublk_device *ub,
+		struct ublk_queue *ubq, const unsigned short *tags,
+		unsigned int nr_tags);
 static inline struct request *__ublk_check_and_get_req(struct ublk_device *ub,
 		u16 q_id, u16 tag, struct ublk_io *io);
 static void ublk_batch_dispatch(struct ublk_queue *ubq,
@@ -2218,9 +2221,10 @@ static int __ublk_batch_dispatch(struct ublk_queue *ubq,
 	if (!sel.addr)
 		return -ENOBUFS;
 
-	/* single reader needn't lock and sizeof(kfifo element) is 2 bytes */
+	/* sizeof(kfifo element) is 2 bytes */
 	len = min(len, sizeof(tag_buf)) / tag_sz;
-	len = kfifo_out(&ubq->evts_fifo, tag_buf, len);
+	len = kfifo_out_spinlocked_noirqsave(&ubq->evts_fifo, tag_buf, len,
+					     &ubq->evts_lock);
 
 	needs_filter = ublk_batch_prep_dispatch(ubq, data, tag_buf, len);
 	/* Filter out unused tags before posting to userspace */
@@ -3034,25 +3038,44 @@ static void __ublk_fail_req(struct ublk_device *ub, struct ublk_io *io,
 }
 
 /*
+ * Dispose of tags that never reached the ublk server. Never called with
+ * evts_lock held: __ublk_fail_req() ends or requeues requests.
+ */
+static void ublk_batch_abort_tags(struct ublk_device *ub,
+		struct ublk_queue *ubq, const unsigned short *tags,
+		unsigned int nr_tags)
+{
+	unsigned int i;
+
+	for (i = 0; i < nr_tags; i++) {
+		struct request *req = blk_mq_tag_to_rq(
+				ub->tag_set.tags[ubq->q_id], tags[i]);
+		struct ublk_io *io = &ubq->ios[tags[i]];
+
+		/* leaves ACTIVE here, so the tag walk skips it */
+		ublk_clear_dispatching(io);
+		/* never dispatched, so no reference to relinquish */
+		if (!WARN_ON_ONCE(!req || !blk_mq_request_started(req)))
+			__ublk_fail_req(ub, io, req, false);
+	}
+}
+
+/*
  * Request tag may just be filled to event kfifo, not get chance to
  * dispatch, abort these requests too
  */
 static void ublk_abort_batch_queue(struct ublk_device *ub,
 				   struct ublk_queue *ubq)
 {
-	unsigned short tag;
+	unsigned short tags[MAX_NR_TAG];
+	unsigned int cnt;
 
-	while (kfifo_out(&ubq->evts_fifo, &tag, 1)) {
-		struct request *req = blk_mq_tag_to_rq(
-				ub->tag_set.tags[ubq->q_id], tag);
-
-		/*
-		 * Started when it was queued, but pulled off the fifo before
-		 * ublk_dispatch_req() ran, never got the dispatch ref.
-		 */
-		if (!WARN_ON_ONCE(!req || !blk_mq_request_started(req)))
-			__ublk_fail_req(ub, &ubq->ios[tag], req, false);
-	}
+	/* Pop under the lock because the task-work reader may still run. */
+	do {
+		cnt = kfifo_out_spinlocked_noirqsave(&ubq->evts_fifo, tags,
+				ARRAY_SIZE(tags), &ubq->evts_lock);
+		ublk_batch_abort_tags(ub, ubq, tags, cnt);
+	} while (cnt);
 }
 
 /*
