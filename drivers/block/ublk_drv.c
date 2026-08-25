@@ -310,6 +310,79 @@ struct ublk_buf_range {
 	unsigned int base_offset;	/* byte offset within buffer */
 };
 
+/* steps a device passes through once, in teardown order */
+enum ublk_teardown_step {
+	UBLK_TD_ABORT_DEV,
+	UBLK_TD_STOP_DEV,
+};
+
+/*
+ * Counted events are the ones that only mean something compared against
+ * each other: every queued task work should run, and every cancellation
+ * call either completes a command or says why it did not.
+ */
+/* who opened the character device, first and most recent */
+struct ublk_opener {
+	char		comm[TASK_COMM_LEN];
+	pid_t		tgid;
+	/* what the device looked like when this open was accepted */
+	unsigned int	dev_state;
+	unsigned long	ub_state;
+	bool		canceling;
+	/* cleared when this same file is released, so non-NULL means open */
+	struct file	*file;
+};
+
+struct ublk_teardown_record {
+	unsigned long	steps;
+	struct ublk_opener first_opener;
+	struct ublk_opener last_opener;
+	/* a device can be opened more than once over its life */
+	atomic_t	ch_open;
+	atomic_t	ch_release;
+	atomic_t	release_work_run;
+	atomic_t	release_work_done;
+	atomic_t	release_work_requeued;
+	atomic_t	tw_queued;
+	atomic_t	tw_run;
+	atomic_t	cancel_fn;
+	atomic_t	cancel_done;
+	atomic_t	cancel_skip_owner;
+	atomic_t	cancel_skip_started;
+};
+
+#ifdef CONFIG_DEBUG_FS
+#define ublk_td_step(ub, step)	set_bit(step, &(ub)->teardown.steps)
+#define ublk_td_count(ub, event) atomic_inc(&(ub)->teardown.event)
+
+#define ublk_td_closed(ub, filp)					\
+do {									\
+	if ((ub)->teardown.first_opener.file == (filp))			\
+		(ub)->teardown.first_opener.file = NULL;		\
+	if ((ub)->teardown.last_opener.file == (filp))			\
+		(ub)->teardown.last_opener.file = NULL;			\
+} while (0)
+
+#define ublk_td_opener(ub, nth)						\
+do {									\
+	struct ublk_opener *who = ((nth) == 1) ?			\
+		&(ub)->teardown.first_opener :				\
+		&(ub)->teardown.last_opener;				\
+									\
+	strscpy(who->comm, current->comm, sizeof(who->comm));		\
+	who->tgid = current->tgid;					\
+	who->dev_state = (ub)->dev_info.state;				\
+	who->ub_state = (ub)->state;					\
+	who->canceling = (ub)->canceling;				\
+	who->file = filp;						\
+} while (0)
+#else
+#define ublk_td_step(ub, step)		do { } while (0)
+#define ublk_td_count(ub, event)	do { } while (0)
+#define ublk_td_opener(ub, nth)		do { } while (0)
+#define ublk_td_closed(ub, filp)	do { } while (0)
+#endif
+
 struct ublk_device {
 	struct gendisk		*ub_disk;
 
@@ -349,6 +422,7 @@ struct ublk_device {
 
 #ifdef CONFIG_DEBUG_FS
 	struct dentry		*debugfs_dir;
+	struct ublk_teardown_record teardown;
 #endif
 
 	struct ublk_queue       *queues[];
@@ -2070,6 +2144,8 @@ static void ublk_cmd_tw_cb(struct io_tw_req tw_req, io_tw_token_t tw)
 	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
 	struct ublk_queue *ubq = pdu->ubq;
 
+	ublk_td_count(ubq->dev, tw_run);
+
 	ublk_dispatch_req(ubq, pdu->req);
 }
 
@@ -2094,6 +2170,7 @@ static void ublk_queue_cmd(struct ublk_queue *ubq, struct request *rq)
 	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
 
 	pdu->req = rq;
+	ublk_td_count(ubq->dev, tw_queued);
 	io_uring_cmd_complete_in_task(cmd, ublk_cmd_tw_cb);
 }
 
@@ -2103,6 +2180,8 @@ static void ublk_cmd_list_tw_cb(struct io_tw_req tw_req, io_tw_token_t tw)
 	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
 	struct request *rq = pdu->req_list;
 	struct request *next;
+
+	ublk_td_count(pdu->ubq->dev, tw_run);
 
 	do {
 		next = rq->rq_next;
@@ -2119,6 +2198,7 @@ static void ublk_queue_cmd_list(struct ublk_io *io, struct rq_list *l)
 
 	pdu->req_list = rq_list_peek(l);
 	rq_list_init(l);
+	ublk_td_count(pdu->ubq->dev, tw_queued);
 	io_uring_cmd_complete_in_task(cmd, ublk_cmd_list_tw_cb);
 }
 
@@ -2403,6 +2483,8 @@ static int ublk_ch_open(struct inode *inode, struct file *filp)
 
 	if (test_and_set_bit(UB_STATE_OPEN, &ub->state))
 		return -EBUSY;
+	ublk_td_count(ub, ch_open);
+	ublk_td_opener(ub, atomic_read(&ub->teardown.ch_open));
 	filp->private_data = ub;
 	ub->ublksrv_tgid = current->tgid;
 	return 0;
@@ -2539,7 +2621,10 @@ static void ublk_ch_release_work_fn(struct work_struct *work)
 	 * so have to wait by scheduling work function for avoiding the two
 	 * file release dependency.
 	 */
+	ublk_td_count(ub, release_work_run);
+
 	if (ublk_check_and_reset_active_ref(ub)) {
+		ublk_td_count(ub, release_work_requeued);
 		schedule_delayed_work(&ub->exit_work, 1);
 		return;
 	}
@@ -2566,6 +2651,7 @@ static void ublk_ch_release_work_fn(struct work_struct *work)
 	 * All requests may be inflight, so ->canceling may not be set, set
 	 * it now.
 	 */
+	ublk_td_step(ub, UBLK_TD_ABORT_DEV);
 	mutex_lock(&ub->cancel_mutex);
 	ublk_set_canceling(ub, true);
 	for (i = 0; i < ub->dev_info.nr_hw_queues; i++)
@@ -2615,6 +2701,7 @@ unlock:
 	/* all uring_cmd has been done now, reset device & ubq */
 	ublk_reset_ch_dev(ub);
 out:
+	ublk_td_count(ub, release_work_done);
 	clear_bit(UB_STATE_OPEN, &ub->state);
 
 	/* put the reference grabbed in ublk_ch_release() */
@@ -2624,6 +2711,9 @@ out:
 static int ublk_ch_release(struct inode *inode, struct file *filp)
 {
 	struct ublk_device *ub = filp->private_data;
+
+	ublk_td_count(ub, ch_release);
+	ublk_td_closed(ub, filp);
 
 	/*
 	 * Grab ublk device reference, so it won't be gone until we are
@@ -2769,8 +2859,10 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	struct request *req;
 	bool done;
 
-	if (!(io->flags & UBLK_IO_FLAG_ACTIVE))
+	if (!(io->flags & UBLK_IO_FLAG_ACTIVE)) {
+		ublk_td_count(ub, cancel_skip_owner);
 		return;
+	}
 
 	/*
 	 * Don't try to cancel this command if the request is started for
@@ -2783,8 +2875,10 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	 * that ublk_dispatch_req() is always called
 	 */
 	req = blk_mq_tag_to_rq(ub->tag_set.tags[ubq->q_id], tag);
-	if (req && blk_mq_request_started(req) && req->tag == tag)
+	if (req && blk_mq_request_started(req) && req->tag == tag) {
+		ublk_td_count(ub, cancel_skip_started);
 		return;
+	}
 
 	spin_lock(&ubq->cancel_lock);
 	done = !!(io->flags & UBLK_IO_FLAG_CANCELED);
@@ -2795,8 +2889,10 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	}
 	spin_unlock(&ubq->cancel_lock);
 
-	if (!done && cmd)
+	if (!done && cmd) {
+		ublk_td_count(ub, cancel_done);
 		io_uring_cmd_done(cmd, UBLK_IO_RES_ABORT, issue_flags);
+	}
 }
 
 /*
@@ -2892,6 +2988,8 @@ static void ublk_uring_cmd_cancel_fn(struct io_uring_cmd *cmd,
 	io = &ubq->ios[pdu->tag];
 	if (WARN_ON_ONCE(task && task != io->task))
 		return;
+
+	ublk_td_count(ubq->dev, cancel_fn);
 
 	ublk_start_cancel(ubq->dev);
 
@@ -2995,6 +3093,8 @@ static void ublk_stop_dev_unlocked(struct ublk_device *ub)
 	__must_hold(&ub->mutex)
 {
 	struct gendisk *disk;
+
+	ublk_td_step(ub, UBLK_TD_STOP_DEV);
 
 	if (ub->dev_info.state == UBLK_S_DEV_DEAD)
 		return;
@@ -4453,12 +4553,74 @@ static int ublk_debugfs_tags_show(struct seq_file *sf, void *priv)
 }
 DEFINE_SHOW_ATTRIBUTE(ublk_debugfs_tags);
 
+static const char * const ublk_teardown_step_name[] = {
+	[UBLK_TD_ABORT_DEV]	= "abort_dev",
+	[UBLK_TD_STOP_DEV]	= "stop_dev",
+};
+
+/*
+ * A slot that still has a file is one nobody released. Its reference count
+ * says how many holders are left now that the opener is gone.
+ */
+static void ublk_debugfs_put_opener(struct seq_file *sf, const char *label,
+				    const struct ublk_opener *who)
+{
+	seq_printf(sf, "%s: %s/%d at state %s ub_state 0x%lx canceling %d",
+		   label, who->comm, who->tgid,
+		   ublk_dev_state_name(who->dev_state), who->ub_state,
+		   who->canceling);
+	if (who->file)
+		seq_printf(sf, " file %p refs %lu STILL OPEN",
+			   who->file, file_count(who->file));
+	seq_puts(sf, "\n");
+}
+
+static int ublk_debugfs_teardown_show(struct seq_file *sf, void *priv)
+{
+	struct ublk_device *ub = sf->private;
+	struct ublk_teardown_record *td = &ub->teardown;
+	unsigned int i;
+
+	seq_puts(sf, "steps:");
+	for (i = 0; i < ARRAY_SIZE(ublk_teardown_step_name); i++) {
+		if (test_bit(i, &td->steps))
+			seq_printf(sf, " %s", ublk_teardown_step_name[i]);
+	}
+	seq_puts(sf, "\n");
+
+	/* a second open that never released is a leaked reference */
+	seq_printf(sf, "ch_open: %d\n", atomic_read(&td->ch_open));
+	ublk_debugfs_put_opener(sf, "first_opener", &td->first_opener);
+	ublk_debugfs_put_opener(sf, "last_opener", &td->last_opener);
+	seq_printf(sf, "ch_release: %d\n", atomic_read(&td->ch_release));
+	seq_printf(sf, "release_work_run: %d\n",
+		   atomic_read(&td->release_work_run));
+	seq_printf(sf, "release_work_done: %d\n",
+		   atomic_read(&td->release_work_done));
+	seq_printf(sf, "release_work_requeued: %d\n",
+		   atomic_read(&td->release_work_requeued));
+	/* every queued callback should run */
+	seq_printf(sf, "tw_queued: %d\n", atomic_read(&td->tw_queued));
+	seq_printf(sf, "tw_run: %d\n", atomic_read(&td->tw_run));
+	/* ublk_cancel_queue() calls in too, so the three below can exceed it */
+	seq_printf(sf, "cancel_fn: %d\n", atomic_read(&td->cancel_fn));
+	seq_printf(sf, "cancel_done: %d\n", atomic_read(&td->cancel_done));
+	seq_printf(sf, "cancel_skip_owner: %d\n",
+		   atomic_read(&td->cancel_skip_owner));
+	seq_printf(sf, "cancel_skip_started: %d\n",
+		   atomic_read(&td->cancel_skip_started));
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(ublk_debugfs_teardown);
+
 static void ublk_debugfs_dev_files(struct ublk_device *ub)
 {
 	debugfs_create_file("dev_state", 0444, ub->debugfs_dir, ub,
 			    &ublk_debugfs_dev_state_fops);
 	debugfs_create_file("tags", 0444, ub->debugfs_dir, ub,
 			    &ublk_debugfs_tags_fops);
+	debugfs_create_file("teardown", 0444, ub->debugfs_dir, ub,
+			    &ublk_debugfs_teardown_fops);
 }
 
 static void ublk_debugfs_dev_init(struct ublk_device *ub)
