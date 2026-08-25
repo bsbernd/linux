@@ -2911,6 +2911,8 @@ static void ublk_batch_abort_tags(struct ublk_device *ub,
 				ub->tag_set.tags[ubq->q_id], tags[i]);
 		struct ublk_io *io = &ubq->ios[tags[i]];
 
+		/* leaves ACTIVE here, so the tag walk skips it */
+		ublk_undo_dispatch(io);
 		/* never dispatched, so no reference to relinquish */
 		if (!WARN_ON_ONCE(!req || !blk_mq_request_started(req)))
 			__ublk_fail_req(ub, io, req, false);
@@ -2947,6 +2949,9 @@ static void ublk_abort_queue(struct ublk_device *ub, struct ublk_queue *ubq)
 {
 	u16 i;
 
+	if (ublk_support_batch_io(ubq))
+		ublk_abort_batch_queue(ub, ubq);
+
 	for (i = 0; i < ubq->q_depth; i++) {
 		struct ublk_io *io = &ubq->ios[i];
 		struct request *req;
@@ -2962,9 +2967,6 @@ static void ublk_abort_queue(struct ublk_device *ub, struct ublk_queue *ubq)
 		}
 		ublk_io_unlock(io);
 	}
-
-	if (ublk_support_batch_io(ubq))
-		ublk_abort_batch_queue(ub, ubq);
 }
 
 static void ublk_start_cancel(struct ublk_device *ub)
