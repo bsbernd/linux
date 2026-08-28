@@ -320,6 +320,39 @@ _ublk_wait_daemon_exit() {
 	return 0
 }
 
+# The driver's use count, which a leaked device holds up
+_ublk_module_refs() {
+	awk '$1 == "ublk_drv" { print $3 }' /proc/modules
+}
+
+# Reserved before a delete starts: two adds in flight would otherwise pick
+# the same free id and one of them fails with EEXIST for its own reason.
+_ublk_find_free_id() {
+	local id
+
+	for id in $(seq 0 64); do
+		[ -e "/dev/ublkc${id}" ] && continue
+		echo "$id"
+		return 0
+	done
+	return 1
+}
+
+# An add is a control command like any other, so it queues behind
+# ublk_ctl_mutex. A teardown holding that mutex blocks every device on the
+# machine, not just its own.
+_ublk_probe_add_blocked() {
+	local probe_id=$1
+	local busy_id=$2
+
+	if ! timeout "$UBLK_DEL_TIMEOUT" "${UBLK_PROG}" add -t null \
+			-n "${probe_id}" -q 1 -d 8 > /dev/null 2>&1; then
+		echo "add -n ${probe_id} blocked while dev ${busy_id} was torn down"
+		return 1
+	fi
+	_ublk_del_dev_timeout "${probe_id}"
+}
+
 # A device that was deleted and never freed keeps a directory under stale/,
 # so an empty stale/ is the whole fleet accounted for. Needs debugfs.
 _ublk_check_no_stale_devs() {
