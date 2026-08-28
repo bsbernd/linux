@@ -93,6 +93,14 @@ ublk_run_quiesce_dispatch 64 4 ramp -t null -q 4 -d 128 -r 1
 ublk_run_quiesce_dispatch 64 4 ramp -t loop -q 2 -d 64 -r 1 \
 	"${UBLK_BACKFILES[0]}"
 
+# One queue of depth one, quiesced with no ramp-up: the request in flight is
+# the one between being started and being published, so the handover races
+# the cancel pass rather than following it. A request the dispatch neither
+# publishes nor gives back leaves fio waiting for ever.
+ublk_run_quiesce_dispatch 1 1 no-ramp -t null -q 1 -d 1 -r 1
+ublk_run_quiesce_dispatch 1 1 no-ramp -t loop -q 1 -d 1 -r 1 \
+	"${UBLK_BACKFILES[0]}"
+
 if ! _check_dmesg; then
 	echo "kernel complained during quiesce and recover"
 	ERR_CODE=255
