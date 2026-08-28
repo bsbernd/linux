@@ -78,6 +78,7 @@ TEST_PROGS += test_teardown_debugfs_tags.sh
 TEST_PROGS += test_teardown_debugfs_record.sh
 TEST_PROGS += test_teardown_kill_recover.sh
 TEST_PROGS += test_teardown_cancel_race.sh
+TEST_PROGS += test_teardown_user_copy.sh
 
 TEST_FILES := settings
 
