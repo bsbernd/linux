@@ -87,6 +87,7 @@ TEST_PROGS += test_teardown_quiesce_dispatch.sh
 TEST_PROGS += test_teardown_refuse_handover.sh
 TEST_PROGS += test_teardown_batch_fifo.sh
 TEST_PROGS += test_teardown_quiesce_batch.sh
+TEST_PROGS += test_teardown_srv_owned.sh
 
 TEST_FILES := settings
 
