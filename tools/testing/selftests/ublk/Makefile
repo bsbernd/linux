@@ -86,6 +86,7 @@ TEST_PROGS += test_teardown_fetch_cancel_walk.sh
 TEST_PROGS += test_teardown_fetch_on_stop.sh
 TEST_PROGS += test_teardown_get_data.sh
 TEST_PROGS += test_teardown_quiesce_abandoned.sh
+TEST_PROGS += test_teardown_quiesce_dispatch.sh
 
 TEST_FILES := settings
 TEST_FILES += test_common.sh

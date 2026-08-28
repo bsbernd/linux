@@ -874,6 +874,11 @@ _ublk_wait_reads_inflight() {
 	return 1
 }
 
+_ublk_write_one_block() {
+	# a write after the delete must not create a regular file
+	dd if=/dev/zero of=/dev/ublkb"$1" bs=4k count=1 oflag=direct conv=nocreat
+}
+
 UBLK_PROG=$(_ublk_test_top_dir)/kublk
 UBLK_TEST_QUIET=1
 UBLK_TEST_SHOW_RESULT=1
