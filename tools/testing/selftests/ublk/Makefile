@@ -75,6 +75,7 @@ TEST_PROGS += test_stress_09.sh
 
 TEST_PROGS += test_teardown_debugfs_tags.sh
 TEST_PROGS += test_teardown_debugfs_record.sh
+TEST_PROGS += test_teardown_kill_recover.sh
 
 TEST_FILES := settings
 
