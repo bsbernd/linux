@@ -273,6 +273,29 @@ _ublk_wait_tag_flag_gone() {
 	return 1
 }
 
+# A server the driver will not let go of outlives the device it served, and
+# a SIGKILL that does not land is the clearest form of that.
+_ublk_wait_daemon_gone() {
+	local pid=$1
+	local deadline=$2
+	local secs=0
+
+	[ -z "$pid" ] && return 0
+	[ "$pid" -le 0 ] 2>/dev/null && return 0
+
+	kill -9 "$pid" > /dev/null 2>&1
+	while [ "$secs" -lt "$deadline" ] && kill -0 "$pid" 2>/dev/null; do
+		sleep 1
+		secs=$((secs + 1))
+	done
+
+	if kill -0 "$pid" 2>/dev/null; then
+		echo "ublk daemon ${pid} still alive after ${deadline}s"
+		return 1
+	fi
+	return 0
+}
+
 # Quiesce a device and bring it back. A quiesce that never returns is one of
 # the failures this covers, so the state is waited for rather than assumed.
 # Usage: _ublk_quiesce_and_recover <dev_id> <add args...>

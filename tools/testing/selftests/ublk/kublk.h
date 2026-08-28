@@ -100,6 +100,8 @@ struct dev_ctx {
 	unsigned int	rdonly_shmem_buf:1;
 	unsigned int	bad_buf_index:1;
 	unsigned int	rotate_auto_buf:1;
+	unsigned int	clean_teardown:1;
+	unsigned int	abandon_ring:1;
 	__u32 integrity_flags;
 	__u8 metadata_size;
 	__u8 pi_offset;

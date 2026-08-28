@@ -1060,6 +1060,74 @@ static void ublk_batch_setup_queues(struct ublk_thread *t)
 	}
 }
 
+/*
+ * Server-initiated teardown. Neither ordering a real ublk server picks is
+ * reachable otherwise: the IO threads only leave ublk_process_io() once the
+ * driver has cancelled the commands parked in their rings, so every stop
+ * arrives from an external 'ublk del'.
+ *
+ * UBLK_TEARDOWN_CLEAN sends STOP_DEV and lets the driver cancel, so the
+ * rings go only after the queues drained. UBLK_TEARDOWN_ABANDON_RING leaves
+ * the rings straight away, while the device is still live and no STOP_DEV
+ * was ever sent, which leaves the driver with the rings gone but
+ * /dev/ublkcN still open.
+ *
+ * Both run on a sigwait() thread rather than a handler, because
+ * ublk_ctrl_stop_dev() submits on the control ring and is not
+ * async-signal-safe.
+ */
+enum ublk_teardown_mode {
+	UBLK_TEARDOWN_NONE,
+	UBLK_TEARDOWN_CLEAN,
+	UBLK_TEARDOWN_ABANDON_RING,
+};
+
+static struct {
+	volatile sig_atomic_t	abandon;
+	enum ublk_teardown_mode	mode;
+	struct ublk_dev		*dev;
+	struct ublk_thread_info	*tinfo;
+	unsigned		nthreads;
+} ublk_teardown;
+
+static enum ublk_teardown_mode ublk_teardown_mode_of(const struct dev_ctx *ctx)
+{
+	if (ctx->clean_teardown)
+		return UBLK_TEARDOWN_CLEAN;
+	if (ctx->abandon_ring)
+		return UBLK_TEARDOWN_ABANDON_RING;
+	return UBLK_TEARDOWN_NONE;
+}
+
+/* only needed to break io_uring_submit_and_wait() out of its wait */
+static void ublk_teardown_wakeup(int sig)
+{
+}
+
+static void *ublk_teardown_fn(void *data)
+{
+	sigset_t set;
+	unsigned i;
+	int sig;
+
+	sigemptyset(&set);
+	sigaddset(&set, SIGINT);
+	sigaddset(&set, SIGTERM);
+
+	if (sigwait(&set, &sig))
+		return NULL;
+
+	if (ublk_teardown.mode == UBLK_TEARDOWN_CLEAN) {
+		ublk_ctrl_stop_dev(ublk_teardown.dev);
+		return NULL;
+	}
+
+	ublk_teardown.abandon = 1;
+	for (i = 0; i < ublk_teardown.nthreads; i++)
+		pthread_kill(ublk_teardown.tinfo[i].thread, SIGUSR1);
+	return NULL;
+}
+
 static __attribute__((noinline)) int __ublk_io_handler_fn(struct ublk_thread_info *info)
 {
 	struct ublk_thread t = {
@@ -1093,6 +1161,9 @@ static __attribute__((noinline)) int __ublk_io_handler_fn(struct ublk_thread_inf
 	}
 
 	do {
+		/* leave without draining, so the ring goes while IO is live */
+		if (ublk_teardown.abandon)
+			break;
 		if (ublk_process_io(&t) < 0)
 			break;
 	} while (1);
@@ -1466,8 +1537,10 @@ static int ublk_start_daemon(const struct dev_ctx *ctx, struct ublk_dev *dev)
 	cpu_set_t *affinity_buf;
 	unsigned char (*q_thread_map)[UBLK_MAX_QUEUES] = NULL;
 	uint64_t stop_val = 1;
-	pthread_t listener;
+	pthread_t listener, teardown;
+	bool teardown_started = false;
 	void *thread_ret;
+	sigset_t set;
 	sem_t ready;
 	int ret, i;
 
@@ -1476,6 +1549,25 @@ static int ublk_start_daemon(const struct dev_ctx *ctx, struct ublk_dev *dev)
 	tinfo = calloc(sizeof(struct ublk_thread_info), dev->nthreads);
 	if (!tinfo)
 		return -ENOMEM;
+
+	ublk_teardown.mode = ublk_teardown_mode_of(ctx);
+	if (ublk_teardown.mode != UBLK_TEARDOWN_NONE) {
+		/*
+		 * Block the two signals before any IO thread exists, so they
+		 * inherit the mask and only the sigwait() thread sees them.
+		 * SIGUSR1 stays deliverable: it is what breaks an IO thread
+		 * out of io_uring_submit_and_wait().
+		 */
+		sigemptyset(&set);
+		sigaddset(&set, SIGINT);
+		sigaddset(&set, SIGTERM);
+		pthread_sigmask(SIG_BLOCK, &set, NULL);
+		signal(SIGUSR1, ublk_teardown_wakeup);
+
+		ublk_teardown.dev = dev;
+		ublk_teardown.tinfo = tinfo;
+		ublk_teardown.nthreads = dev->nthreads;
+	}
 
 	sem_init(&ready, 0, 0);
 	ret = ublk_dev_prep(ctx, dev);
@@ -1571,6 +1663,11 @@ static int ublk_start_daemon(const struct dev_ctx *ctx, struct ublk_dev *dev)
 		ublk_ctrl_dump(dev);
 	else
 		ublk_send_dev_event(ctx, dev, dev->dev_info.dev_id);
+
+	/* only once the device is live is there anything to tear down */
+	if (ublk_teardown.mode != UBLK_TEARDOWN_NONE)
+		teardown_started = !pthread_create(&teardown, NULL,
+						   ublk_teardown_fn, NULL);
 fail_start:
 	/*
 	 * Wait for I/O threads to exit. While waiting, a listener
@@ -1595,6 +1692,21 @@ fail_start:
 		ublk_shmem_sock_destroy(dinfo->dev_id, linfo.sock_fd);
 	}
 	ublk_shmem_unregister_all();
+
+	if (teardown_started)
+		pthread_join(teardown, NULL);
+
+	/*
+	 * The rings are gone but /dev/ublkcN is not: closing it here would
+	 * turn this into the ordinary exit the other modes take. Stay until
+	 * something outside kills us.
+	 */
+	if (ublk_teardown.abandon) {
+		free(tinfo);
+		while (1)
+			pause();
+	}
+
 	free(tinfo);
  fail:
 	for (i = 0; i < dinfo->nr_hw_queues; i++)
@@ -2184,6 +2296,8 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--batch|-b] [--rotate_auto_buf] [--no_auto_part_scan]\n");
 	printf("\t[--bad_buf_index] fail auto buffer registration where no fallback was asked for\n");
 	printf("\t[--io_desc_size SIZE]\n");
+	printf("\t[--clean_teardown] stop the device on SIGINT/SIGTERM and let the driver cancel\n");
+	printf("\t[--abandon_ring] leave the rings on SIGINT/SIGTERM without stopping the device\n");
 	printf("\t[target options] [backfile1] [backfile2] ...\n");
 	printf("\tdefault: nr_queues=2(max 32), depth=128(max 1024), dev_id=-1(auto allocation)\n");
 	printf("\tdefault: nthreads=nr_queues");
@@ -2261,6 +2375,8 @@ int main(int argc, char *argv[])
 		{ "safe",		0,	NULL,  0 },
 		{ "batch",              0,      NULL, 'b'},
 		{ "rotate_auto_buf",	0,	NULL,  0 },
+		{ "clean_teardown",	0,	NULL,  0 },
+		{ "abandon_ring",	0,	NULL,  0 },
 		{ "no_auto_part_scan",	0,	NULL,  0 },
 		{ "shmem_zc",		0,	NULL,  0  },
 		{ "htlb",		1,	NULL,  0  },
@@ -2410,6 +2526,10 @@ int main(int argc, char *argv[])
 				ctx.safe_stop = 1;
 			if (!strcmp(longopts[option_idx].name, "no_auto_part_scan"))
 				ctx.flags |= UBLK_F_NO_AUTO_PART_SCAN;
+			if (!strcmp(longopts[option_idx].name, "clean_teardown"))
+				ctx.clean_teardown = 1;
+			if (!strcmp(longopts[option_idx].name, "abandon_ring"))
+				ctx.abandon_ring = 1;
 			if (!strcmp(longopts[option_idx].name, "shmem_zc"))
 				ctx.flags |= UBLK_F_SHMEM_ZC;
 			if (!strcmp(longopts[option_idx].name, "htlb"))
