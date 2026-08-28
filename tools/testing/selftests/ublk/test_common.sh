@@ -297,6 +297,45 @@ _ublk_wait_tag_flag_present() {
 	return 1
 }
 
+# For the orderings where the server takes its own device down, it has to
+# reach the end of that on its own -- so no signal is sent here.
+_ublk_wait_daemon_exit() {
+	local pid=$1
+	local deadline=$2
+	local secs=0
+
+	[ -z "$pid" ] && return 0
+	[ "$pid" -le 0 ] 2>/dev/null && return 0
+
+	while [ "$secs" -lt "$deadline" ] && kill -0 "$pid" 2>/dev/null; do
+		sleep 1
+		secs=$((secs + 1))
+	done
+
+	if kill -0 "$pid" 2>/dev/null; then
+		echo "ublk daemon ${pid} did not exit within ${deadline}s"
+		kill -9 "$pid" > /dev/null 2>&1
+		return 1
+	fi
+	return 0
+}
+
+# A device that was deleted and never freed keeps a directory under stale/,
+# so an empty stale/ is the whole fleet accounted for. Needs debugfs.
+_ublk_check_no_stale_devs() {
+	local dir
+	local left
+
+	dir=$(_ublk_debugfs_root) || return 0
+	[ -d "${dir}/stale" ] || return 0
+
+	left=$(ls -1 "${dir}/stale" 2>/dev/null)
+	[ -z "$left" ] && return 0
+
+	echo "devices deleted but never freed: $(echo "$left" | tr '\n' ' ')"
+	return 1
+}
+
 # A server the driver will not let go of outlives the device it served, and
 # a SIGKILL that does not land is the clearest form of that.
 _ublk_wait_daemon_gone() {

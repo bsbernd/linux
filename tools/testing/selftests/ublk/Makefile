@@ -91,6 +91,7 @@ TEST_PROGS += test_teardown_srv_owned.sh
 TEST_PROGS += test_teardown_batch_cancel_tw.sh
 TEST_PROGS += test_teardown_stop_owned.sh
 TEST_PROGS += test_teardown_abandon_ring.sh
+TEST_PROGS += test_teardown_self_del.sh
 
 TEST_FILES := settings
 

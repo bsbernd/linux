@@ -1084,6 +1084,7 @@ enum ublk_teardown_mode {
 	UBLK_TEARDOWN_NONE,
 	UBLK_TEARDOWN_CLEAN,
 	UBLK_TEARDOWN_ABANDON_RING,
+	UBLK_TEARDOWN_SELF_DEL,
 };
 
 static struct {
@@ -1098,6 +1099,8 @@ static enum ublk_teardown_mode ublk_teardown_mode_of(const struct dev_ctx *ctx)
 {
 	if (ctx->clean_teardown)
 		return UBLK_TEARDOWN_CLEAN;
+	if (ctx->self_del)
+		return UBLK_TEARDOWN_SELF_DEL;
 	if (ctx->abandon_ring)
 		return UBLK_TEARDOWN_ABANDON_RING;
 	return UBLK_TEARDOWN_NONE;
@@ -1123,6 +1126,16 @@ static void *ublk_teardown_fn(void *data)
 
 	if (ublk_teardown.mode == UBLK_TEARDOWN_CLEAN) {
 		ublk_ctrl_stop_dev(ublk_teardown.dev);
+		return NULL;
+	}
+
+	/*
+	 * Deleting our own device: every command parked in our rings is a
+	 * reference on the ublkc file, and they only go when we exit, which
+	 * we cannot do until this returns.
+	 */
+	if (ublk_teardown.mode == UBLK_TEARDOWN_SELF_DEL) {
+		ublk_ctrl_del_dev(ublk_teardown.dev);
 		return NULL;
 	}
 
@@ -2303,6 +2316,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--io_desc_size SIZE]\n");
 	printf("\t[--clean_teardown] stop the device on SIGINT/SIGTERM and let the driver cancel\n");
 	printf("\t[--abandon_ring] leave the rings on SIGINT/SIGTERM without stopping the device\n");
+	printf("\t[--self_del] delete our own device on SIGINT/SIGTERM\n");
 	printf("\t[--hold_io] never complete a fetched request, leaving the tag owned by the server\n");
 	printf("\t[target options] [backfile1] [backfile2] ...\n");
 	printf("\tdefault: nr_queues=2(max 32), depth=128(max 1024), dev_id=-1(auto allocation)\n");
@@ -2383,6 +2397,7 @@ int main(int argc, char *argv[])
 		{ "rotate_auto_buf",	0,	NULL,  0 },
 		{ "clean_teardown",	0,	NULL,  0 },
 		{ "abandon_ring",	0,	NULL,  0 },
+		{ "self_del",		0,	NULL,  0 },
 		{ "hold_io",		0,	NULL,  0 },
 		{ "no_auto_part_scan",	0,	NULL,  0 },
 		{ "shmem_zc",		0,	NULL,  0  },
@@ -2537,6 +2552,8 @@ int main(int argc, char *argv[])
 				ctx.clean_teardown = 1;
 			if (!strcmp(longopts[option_idx].name, "abandon_ring"))
 				ctx.abandon_ring = 1;
+			if (!strcmp(longopts[option_idx].name, "self_del"))
+				ctx.self_del = 1;
 			if (!strcmp(longopts[option_idx].name, "hold_io"))
 				ctx.hold_io = 1;
 			if (!strcmp(longopts[option_idx].name, "shmem_zc"))
