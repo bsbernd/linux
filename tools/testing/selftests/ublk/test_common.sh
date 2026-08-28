@@ -141,6 +141,26 @@ _ublk_debugfs_root() {
 	echo "${mnt}/ublk"
 }
 
+# A race that completes leaves nothing behind but a kernel log line, so a
+# splat fails the test the way a bad exit code does. Only lines logged after
+# _prep_test wrote its marker count.
+UBLK_DMESG_BAD='BUG:|WARNING:|blocked for more than|circular locking'
+UBLK_DMESG_BAD+='|refcount_t:|KCSAN:|array-index-out-of-bounds'
+UBLK_DMESG_BAD+='|suspicious rcu_dereference'
+
+_check_dmesg() {
+	local from
+	local out
+
+	from=$(dmesg | grep -n "ublk selftest: ${TID} starting" | tail -1 |
+		cut -d: -f1)
+	[ -z "$from" ] && from=0
+	out=$(dmesg | tail -n +$((from + 1)) | grep -E "$UBLK_DMESG_BAD")
+	[ -z "$out" ] && return 0
+	echo "$out" | sed 's/^/\t/'
+	return 1
+}
+
 _prep_test() {
 	_check_root
 	local type=$1
