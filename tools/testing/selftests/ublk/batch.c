@@ -171,6 +171,8 @@ static void free_batch_fetch_buf(struct ublk_thread *t)
 		free(t->fetch[i].fetch_buf);
 	}
 	free(t->fetch);
+	if (t->noaccess_fetch_buf)
+		munmap(t->noaccess_fetch_buf, getpagesize());
 }
 
 static int alloc_batch_fetch_buf(struct ublk_thread *t)
@@ -180,6 +182,15 @@ static int alloc_batch_fetch_buf(struct ublk_thread *t)
 	unsigned buf_size = round_up(t->dev->dev_info.queue_depth * 2, pg_sz);
 	int ret;
 	int i = 0;
+
+	if (t->dev->bad_fetch_buf) {
+		t->noaccess_fetch_buf = mmap(NULL, pg_sz, PROT_NONE,
+				MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (t->noaccess_fetch_buf == MAP_FAILED) {
+			t->noaccess_fetch_buf = NULL;
+			return -ENOMEM;
+		}
+	}
 
 	/* double fetch buffer for each queue */
 	t->nr_fetch_bufs = t->nr_queues * 2;
@@ -279,9 +290,14 @@ static void ublk_batch_queue_fetch(struct ublk_thread *t,
 				   unsigned short buf_idx)
 {
 	unsigned short nr_elem = t->fetch[buf_idx].fetch_buf_size / 2;
+	void *buf = t->fetch[buf_idx].fetch_buf;
 	struct io_uring_sqe *sqe;
 
-	io_uring_buf_ring_add(t->fetch[buf_idx].br, t->fetch[buf_idx].fetch_buf,
+	/* the driver's copy_to_user() of the tags faults on the first byte */
+	if (t->noaccess_fetch_buf)
+		buf = t->noaccess_fetch_buf;
+
+	io_uring_buf_ring_add(t->fetch[buf_idx].br, buf,
 			t->fetch[buf_idx].fetch_buf_size,
 			0, 0, 0);
 	io_uring_buf_ring_advance(t->fetch[buf_idx].br, 1);
@@ -447,7 +463,9 @@ void ublk_batch_compl_cmd(struct ublk_thread *t,
 		t->state |= UBLKS_T_STOPPING;
 	} else if (!(cqe->flags & IORING_CQE_F_MORE) || cqe->res == -ENOBUFS) {
 		t->cmd_inflight--;
-		ublk_batch_queue_fetch(t, q, buf_idx);
+		/* a new fetch would dispatch the put-back tags again */
+		if (!t->dev->bad_fetch_buf)
+			ublk_batch_queue_fetch(t, q, buf_idx);
 	}
 }
 

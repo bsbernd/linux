@@ -103,6 +103,7 @@ struct dev_ctx {
 	unsigned int	no_auto_part_scan:1;
 	unsigned int	rdonly_shmem_buf:1;
 	unsigned int	bad_buf_index:1;
+	unsigned int	bad_fetch_buf:1;
 	unsigned int	rotate_auto_buf:1;
 	unsigned int	hold_io_on_signal:1;
 	__u32 integrity_flags;
@@ -280,6 +281,8 @@ struct ublk_thread {
 	/* FETCH_IO_CMDS buffer */
 	unsigned short nr_fetch_bufs;
 	struct batch_fetch_buf *fetch;
+	/* --bad_fetch_buf: PROT_NONE page handed out instead of fetch_buf */
+	void *noaccess_fetch_buf;
 
 	struct io_uring ring;
 };
@@ -289,6 +292,7 @@ struct ublk_dev {
 	struct ublksrv_ctrl_dev_info  dev_info;
 	struct ublk_queue q[UBLK_MAX_QUEUES];
 	unsigned bad_buf_index;
+	unsigned bad_fetch_buf;
 	unsigned nthreads;
 	unsigned per_io_tasks;
 

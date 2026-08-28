@@ -2006,6 +2006,7 @@ static int __cmd_dev_add(const struct dev_ctx *ctx)
 	dev->nthreads = nthreads;
 	dev->per_io_tasks = ctx->per_io_tasks;
 	dev->bad_buf_index = ctx->bad_buf_index;
+	dev->bad_fetch_buf = ctx->bad_fetch_buf;
 	dev->tgt.ops = ops;
 	dev->tgt.sq_depth = depth;
 	dev->tgt.cq_depth = depth;
@@ -2414,6 +2415,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 		 "[--pi_offset OFFSET] [--csum_type ip|t10dif|nvme] [--tag_size SIZE]\n");
 	printf("\t[--batch|-b] [--rotate_auto_buf] [--no_auto_part_scan]\n");
 	printf("\t[--bad_buf_index] fail auto buffer registration where no fallback was asked for\n");
+	printf("\t[--bad_fetch_buf] fail every batch fetch in copy_to_user, no re-fetch\n");
 	printf("\t[--io_desc_size SIZE]\n");
 	printf("\t[--hold_io_on_signal] SIGUSR1 holds fetched requests in the server, SIGUSR2 completes them\n");
 	printf("\t[target options] [backfile1] [backfile2] ...\n");
@@ -2502,6 +2504,7 @@ int main(int argc, char *argv[])
 		{ "htlb",		1,	NULL,  0  },
 		{ "rdonly_shmem_buf",	0,	NULL,  0  },
 		{ "bad_buf_index",	0,	NULL,  0  },
+		{ "bad_fetch_buf",	0,	NULL,  0  },
 		{ "io_desc_size",	1,	NULL,  0  },
 		{ "hold_io_on_signal",	0,	NULL,  0  },
 		{ "zoned",		0,	NULL,  0  },
@@ -2666,6 +2669,8 @@ int main(int argc, char *argv[])
 				ctx.rdonly_shmem_buf = 1;
 			if (!strcmp(longopts[option_idx].name, "bad_buf_index"))
 				ctx.bad_buf_index = 1;
+			if (!strcmp(longopts[option_idx].name, "bad_fetch_buf"))
+				ctx.bad_fetch_buf = 1;
 			if (!strcmp(longopts[option_idx].name, "io_desc_size")) {
 				ctx.flags |= UBLK_F_IO_DESC_SIZE;
 				ctx.io_desc_size = strtoul(optarg, NULL, 0);
@@ -2796,6 +2801,11 @@ int main(int argc, char *argv[])
 	    !((ctx.flags & UBLK_F_AUTO_BUF_REG) &&
 	      (ctx.flags & UBLK_F_BATCH_IO))) {
 		ublk_err("rotate_auto_buf requires --auto_zc and --batch\n");
+		return -EINVAL;
+	}
+
+	if (ctx.bad_fetch_buf && !(ctx.flags & UBLK_F_BATCH_IO)) {
+		ublk_err("bad_fetch_buf requires --batch\n");
 		return -EINVAL;
 	}
 
