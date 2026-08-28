@@ -79,6 +79,49 @@ for ((loop = 0; loop < LOOPS; loop++)); do
 	fi
 done
 
+# The server dying is the other way the fifo gets drained, and it drains it
+# from the char device release rather than from a delete. Both readers pop
+# under evts_lock, so KCSAN has something to compare once teardown can drain
+# while a dispatch is still running.
+ublk_kill_with_deep_fifo()
+{
+	local dev_id
+	local fio_pid
+	local state
+
+	dev_id=$(_add_ublk_dev "$@")
+	_check_add_dev "$TID" $?
+
+	fio --name=job1 --filename=/dev/ublkb"${dev_id}" --ioengine=libaio \
+		--rw=randrw --norandommap --iodepth=256 --bs=4k --numjobs=4 \
+		--runtime=30 --time_based > /dev/null 2>&1 &
+	fio_pid=$!
+
+	sleep 2
+
+	state=$(__ublk_kill_daemon "${dev_id}" "QUIESCED")
+	if [ "$state" != "QUIESCED" ]; then
+		echo "dev ${dev_id} isn't quiesced($state) after kill"
+		ERR_CODE=255
+	fi
+
+	# A tag taken off the fifo never reached the server, so the drain
+	# gives it back rather than leaving it marked for a dispatch that is
+	# not going to happen. The device survives the kill here, which a
+	# deleted one does not, so the state can still be read.
+	_ublk_wait_tag_flag_gone "${dev_id}" DISPATCHING 30 || ERR_CODE=255
+
+	# a quiesced recovery device holds its IO by design, so fio cannot be
+	# waited for until the device is gone
+	_ublk_del_dev_timeout "${dev_id}" || ERR_CODE=255
+
+	kill -INT $fio_pid > /dev/null 2>&1
+	_ublk_wait_fio "$fio_pid" 60 || ERR_CODE=255
+}
+
+ublk_kill_with_deep_fifo -t null -q 2 -d 256 -b -r 1
+ublk_kill_with_deep_fifo -t loop -q 2 -d 256 -b -r 1 "${UBLK_BACKFILES[0]}"
+
 if ! _check_dmesg; then
 	echo "kernel complained during batch teardown"
 	ERR_CODE=255
