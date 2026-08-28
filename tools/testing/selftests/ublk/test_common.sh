@@ -187,6 +187,91 @@ _check_dmesg() {
 	return 1
 }
 
+# A debug kernel (KCSAN, KASAN, lockdep) makes every wait longer, and a
+# deadline that expires from slowness reports the same thing as a lost
+# request. Scale every wait from one place rather than per call site.
+UBLK_WAIT_SCALE=${UBLK_WAIT_SCALE:-1}
+
+# A teardown that loses a request never returns, and an unbounded delete
+# wedges the whole run instead of the case that hit it. It also holds
+# ublk_ctl_mutex, so every later add and delete wedges behind it.
+UBLK_DEL_TIMEOUT=$((30 * UBLK_WAIT_SCALE))
+
+_ublk_del_dev_timeout() {
+	local dev_id=$1
+	local res
+
+	timeout "$UBLK_DEL_TIMEOUT" "${UBLK_PROG}" del -n "${dev_id}" \
+		> /dev/null 2>&1
+	res=$?
+	if [ "$res" -eq 124 ]; then
+		echo "delete dev ${dev_id} wedged after ${UBLK_DEL_TIMEOUT}s"
+		return 1
+	fi
+	if [ "$res" -ne 0 ]; then
+		echo "delete dev ${dev_id} failed(${res})"
+		return 1
+	fi
+
+	if [ -f "${UBLK_TEST_DIR}/.ublk_devs" ]; then
+		sed -i "/^${dev_id}$/d" "${UBLK_TEST_DIR}/.ublk_devs"
+	fi
+	udevadm settle --timeout=20
+	return 0
+}
+
+# IO that never completes is a request teardown neither ended nor requeued
+_ublk_wait_fio() {
+	local fio_pid=$1
+	local deadline=$(($2 * UBLK_WAIT_SCALE))
+	local secs=0
+
+	while [ "$secs" -lt "$deadline" ] && kill -0 "$fio_pid" 2>/dev/null; do
+		sleep 1
+		secs=$((secs + 1))
+	done
+
+	if kill -0 "$fio_pid" 2>/dev/null; then
+		echo "fio still has IO in flight after ${deadline}s"
+		kill -9 "$fio_pid" > /dev/null 2>&1
+		wait "$fio_pid" > /dev/null 2>&1
+		return 1
+	fi
+	wait "$fio_pid" > /dev/null 2>&1
+	return 0
+}
+
+# One teardown iteration: drive IO on a device built from the add arguments
+# and land a delete in the middle of it. A delete issued once IO has
+# quiesced cannot reach the window where the server may still be dispatching
+# a tag, so the landing point is varied per iteration.
+# Usage: _ublk_run_del_mid_io <bs> <rw> <jobs> <runtime> <add args...>
+_ublk_run_del_mid_io() {
+	local bs=$1
+	local rw=$2
+	local jobs=$3
+	local runtime=$4
+	local dev_id
+	local fio_pid
+	local res=0
+
+	shift 4
+	dev_id=$(_add_ublk_dev "$@")
+	_check_add_dev "$TID" $?
+
+	fio --name=job1 --filename=/dev/ublkb"${dev_id}" --ioengine=libaio \
+		--rw="${rw}" --norandommap --iodepth=256 --bs="${bs}" \
+		--numjobs="${jobs}" --runtime="${runtime}" --time_based \
+		> /dev/null 2>&1 &
+	fio_pid=$!
+
+	sleep 0.$((RANDOM % 9 + 1))
+
+	_ublk_del_dev_timeout "${dev_id}" || res=1
+	_ublk_wait_fio "$fio_pid" $((runtime + 60)) || res=1
+	return $res
+}
+
 _prep_test() {
 	_check_root
 	local type=$1
@@ -326,7 +411,7 @@ __ublk_quiesce_dev()
 		return "$state"
 	fi
 
-	for ((j=0;j<100;j++)); do
+	for ((j=0;j<100*UBLK_WAIT_SCALE;j++)); do
 		state=$(_get_ublk_dev_state "${dev_id}")
 		[ "$state" == "$exp_state" ] && break
 		sleep 1
@@ -345,7 +430,7 @@ __ublk_kill_daemon()
 	daemon_pid=$(_get_ublk_daemon_pid "${dev_id}")
 	state=$(_get_ublk_dev_state "${dev_id}")
 
-	for ((j=0;j<100;j++)); do
+	for ((j=0;j<100*UBLK_WAIT_SCALE;j++)); do
 		[ "$state" == "$exp_state" ] && break
 		kill -9 "$daemon_pid" > /dev/null 2>&1
 		sleep 1
