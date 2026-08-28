@@ -1331,16 +1331,24 @@ static void ublk_batch_setup_queues(struct ublk_thread *t)
 }
 
 /*
- * Server-initiated teardown, not reachable otherwise: the IO threads only
- * leave ublk_process_io() once the driver has cancelled the commands parked
- * in their rings, so every stop arrives from an external 'ublk del'.
+ * Server-initiated teardown. Neither ordering a real ublk server picks is
+ * reachable otherwise: the IO threads only leave ublk_process_io() once the
+ * driver has cancelled the commands parked in their rings, so every stop
+ * arrives from an external 'ublk del'.
  *
- * UBLK_TEARDOWN_ABANDON_RING leaves the rings straight away, while the
- * device is still live and no STOP_DEV was ever sent, which leaves the
- * driver with the rings gone but /dev/ublkcN still open.
+ * UBLK_TEARDOWN_CLEAN sends STOP_DEV and lets the driver cancel, so the
+ * rings go only after the queues drained. UBLK_TEARDOWN_ABANDON_RING leaves
+ * the rings straight away, while the device is still live and no STOP_DEV
+ * was ever sent, which leaves the driver with the rings gone but
+ * /dev/ublkcN still open.
+ *
+ * Both run on a sigwait() thread rather than a handler, because
+ * ublk_ctrl_stop_dev() submits on the control ring and is not
+ * async-signal-safe.
  */
 enum ublk_teardown_mode {
 	UBLK_TEARDOWN_NONE,
+	UBLK_TEARDOWN_CLEAN,
 	UBLK_TEARDOWN_ABANDON_RING,
 	UBLK_TEARDOWN_SELF_DEL,
 };
@@ -1355,6 +1363,8 @@ static struct {
 
 static enum ublk_teardown_mode ublk_teardown_mode_of(const struct dev_ctx *ctx)
 {
+	if (ctx->clean_teardown)
+		return UBLK_TEARDOWN_CLEAN;
 	if (ctx->self_del)
 		return UBLK_TEARDOWN_SELF_DEL;
 	if (ctx->abandon_ring)
@@ -1379,6 +1389,11 @@ static void *ublk_teardown_fn(void *data)
 
 	if (sigwait(&set, &sig))
 		return NULL;
+
+	if (ublk_teardown.mode == UBLK_TEARDOWN_CLEAN) {
+		ublk_ctrl_stop_dev(ublk_teardown.dev);
+		return NULL;
+	}
 
 	/*
 	 * Deleting our own device: every command parked in our rings is a
@@ -2609,6 +2624,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--bad_fetch_buf] fail every batch fetch in copy_to_user, no re-fetch\n");
 	printf("\t[--io_desc_size SIZE]\n");
 	printf("\t[--hold_io_on_signal] SIGUSR1 holds fetched requests in the server, SIGUSR2 completes them\n");
+	printf("\t[--clean_teardown] stop the device on SIGINT/SIGTERM and let the driver cancel\n");
 	printf("\t[--abandon_ring] leave the rings on SIGINT/SIGTERM without stopping the device\n");
 	printf("\t[--self_del] delete our own device on SIGINT/SIGTERM\n");
 	printf("\t[--hold_io] never complete a fetched request, leaving the tag owned by the server\n");
@@ -2697,6 +2713,7 @@ int main(int argc, char *argv[])
 		{ "defer_fetch_queue",	1,	NULL,  0 },
 		{ "batch",              0,      NULL, 'b'},
 		{ "rotate_auto_buf",	0,	NULL,  0 },
+		{ "clean_teardown",	0,	NULL,  0 },
 		{ "abandon_ring",	0,	NULL,  0 },
 		{ "self_del",		0,	NULL,  0 },
 		{ "hold_io",		0,	NULL,  0 },
@@ -2871,6 +2888,8 @@ int main(int argc, char *argv[])
 				ctx.defer_fetch_queue = strtol(optarg, NULL, 10);
 			if (!strcmp(longopts[option_idx].name, "no_auto_part_scan"))
 				ctx.flags |= UBLK_F_NO_AUTO_PART_SCAN;
+			if (!strcmp(longopts[option_idx].name, "clean_teardown"))
+				ctx.clean_teardown = 1;
 			if (!strcmp(longopts[option_idx].name, "abandon_ring"))
 				ctx.abandon_ring = 1;
 			if (!strcmp(longopts[option_idx].name, "self_del"))

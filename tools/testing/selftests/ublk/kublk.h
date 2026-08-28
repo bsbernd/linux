@@ -111,6 +111,7 @@ struct dev_ctx {
 	unsigned int	rotate_auto_buf:1;
 	unsigned int	hold_io_on_signal:1;
 	unsigned int	hold_io:1;
+	unsigned int	clean_teardown:1;
 	unsigned int	abandon_ring:1;
 	unsigned int	self_del:1;
 	__u32 integrity_flags;
