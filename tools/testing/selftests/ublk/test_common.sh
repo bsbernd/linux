@@ -130,6 +130,43 @@ _get_ublk_daemon_pid() {
 	${UBLK_PROG} list -n "$1" | grep "pid" | awk '{print $7}'
 }
 
+# Echo the driver's debugfs root, or fail when the kernel was built without
+# CONFIG_DEBUG_FS or debugfs is not mounted.
+_ublk_debugfs_root() {
+	local mnt
+
+	mnt=$(awk '$3 == "debugfs" { print $2; exit }' /proc/mounts)
+	[ -z "$mnt" ] && return 1
+	[ -d "${mnt}/ublk" ] || return 1
+	echo "${mnt}/ublk"
+}
+
+# Wait for a per-tag flag to clear. A tag holding a transient state for a
+# moment is normal and only one that never leaves it is a failure, so this
+# polls rather than samples. Skips silently where debugfs is not available.
+# Usage: _ublk_wait_tag_flag_gone <dev_id> <flag> <deadline>
+_ublk_wait_tag_flag_gone() {
+	local dev_id=$1
+	local flag=$2
+	local deadline=$3
+	local dir
+	local secs=0
+
+	dir=$(_ublk_debugfs_root) || return 0
+	[ -f "${dir}/${dev_id}/tags" ] || return 0
+
+	while [ "$secs" -lt "$deadline" ]; do
+		grep -q "$flag" "${dir}/${dev_id}/tags" || return 0
+		sleep 1
+		secs=$((secs + 1))
+	done
+
+	echo "dev ${dev_id} still has ${flag} tags after ${deadline}s:"
+	# flag names print on the line below their tag
+	grep -B1 "$flag" "${dir}/${dev_id}/tags" | sed 's/^/\t/'
+	return 1
+}
+
 _prep_test() {
 	_check_root
 	local type=$1
