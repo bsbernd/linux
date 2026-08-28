@@ -1342,17 +1342,21 @@ static void ublk_batch_setup_queues(struct ublk_thread *t)
 enum ublk_teardown_mode {
 	UBLK_TEARDOWN_NONE,
 	UBLK_TEARDOWN_ABANDON_RING,
+	UBLK_TEARDOWN_SELF_DEL,
 };
 
 static struct {
 	volatile sig_atomic_t	abandon;
 	enum ublk_teardown_mode	mode;
+	struct ublk_dev		*dev;
 	struct ublk_thread_info	*tinfo;
 	unsigned		nthreads;
 } ublk_teardown;
 
 static enum ublk_teardown_mode ublk_teardown_mode_of(const struct dev_ctx *ctx)
 {
+	if (ctx->self_del)
+		return UBLK_TEARDOWN_SELF_DEL;
 	if (ctx->abandon_ring)
 		return UBLK_TEARDOWN_ABANDON_RING;
 	return UBLK_TEARDOWN_NONE;
@@ -1375,6 +1379,16 @@ static void *ublk_teardown_fn(void *data)
 
 	if (sigwait(&set, &sig))
 		return NULL;
+
+	/*
+	 * Deleting our own device: every command parked in our rings is a
+	 * reference on the ublkc file, and they only go when we exit, which
+	 * we cannot do until this returns.
+	 */
+	if (ublk_teardown.mode == UBLK_TEARDOWN_SELF_DEL) {
+		ublk_ctrl_del_dev(ublk_teardown.dev);
+		return NULL;
+	}
 
 	ublk_teardown.abandon = 1;
 	for (i = 0; i < ublk_teardown.nthreads; i++)
@@ -1832,6 +1846,7 @@ static int ublk_start_daemon(const struct dev_ctx *ctx, struct ublk_dev *dev)
 		pthread_sigmask(SIG_BLOCK, &set, NULL);
 		signal(SIGUSR1, ublk_teardown_wakeup);
 
+		ublk_teardown.dev = dev;
 		ublk_teardown.tinfo = tinfo;
 		ublk_teardown.nthreads = dev->nthreads;
 	}
@@ -2595,6 +2610,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--io_desc_size SIZE]\n");
 	printf("\t[--hold_io_on_signal] SIGUSR1 holds fetched requests in the server, SIGUSR2 completes them\n");
 	printf("\t[--abandon_ring] leave the rings on SIGINT/SIGTERM without stopping the device\n");
+	printf("\t[--self_del] delete our own device on SIGINT/SIGTERM\n");
 	printf("\t[--hold_io] never complete a fetched request, leaving the tag owned by the server\n");
 	printf("\t[target options] [backfile1] [backfile2] ...\n");
 	printf("\tdefault: nr_queues=2(max 32), depth=128(max 1024), dev_id=-1(auto allocation)\n");
@@ -2682,6 +2698,7 @@ int main(int argc, char *argv[])
 		{ "batch",              0,      NULL, 'b'},
 		{ "rotate_auto_buf",	0,	NULL,  0 },
 		{ "abandon_ring",	0,	NULL,  0 },
+		{ "self_del",		0,	NULL,  0 },
 		{ "hold_io",		0,	NULL,  0 },
 		{ "no_auto_part_scan",	0,	NULL,  0 },
 		{ "shmem_zc",		0,	NULL,  0  },
@@ -2856,6 +2873,8 @@ int main(int argc, char *argv[])
 				ctx.flags |= UBLK_F_NO_AUTO_PART_SCAN;
 			if (!strcmp(longopts[option_idx].name, "abandon_ring"))
 				ctx.abandon_ring = 1;
+			if (!strcmp(longopts[option_idx].name, "self_del"))
+				ctx.self_del = 1;
 			if (!strcmp(longopts[option_idx].name, "hold_io"))
 				ctx.hold_io = 1;
 			if (!strcmp(longopts[option_idx].name, "shmem_zc"))
