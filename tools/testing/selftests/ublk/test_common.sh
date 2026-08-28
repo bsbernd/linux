@@ -257,6 +257,29 @@ _ublk_wait_read_inflight() {
 	return 1
 }
 
+# A server that deletes its own device has to get through that delete on
+# its own -- so no signal is sent here.
+_ublk_wait_daemon_exit() {
+	local pid=$1
+	local deadline=$2
+	local secs=0
+
+	[ -z "$pid" ] && return 0
+	[ "$pid" -le 0 ] 2>/dev/null && return 0
+
+	while [ "$secs" -lt "$deadline" ] && kill -0 "$pid" 2>/dev/null; do
+		sleep 1
+		secs=$((secs + 1))
+	done
+
+	if kill -0 "$pid" 2>/dev/null; then
+		echo "ublk daemon ${pid} did not exit within ${deadline}s"
+		kill -9 "$pid" > /dev/null 2>&1
+		return 1
+	fi
+	return 0
+}
+
 # Quiesce a device and bring it back. A quiesce that never returns is one of
 # the failures this covers, so the state is waited for rather than assumed.
 # Usage: _ublk_quiesce_and_recover <dev_id> <add args...>

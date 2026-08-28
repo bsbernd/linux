@@ -1022,6 +1022,34 @@ static void ublk_batch_setup_queues(struct ublk_thread *t)
 	}
 }
 
+/*
+ * --self_del: delete our own device on SIGINT or SIGTERM. Not reachable
+ * otherwise: the IO threads only leave ublk_process_io() once the driver
+ * has cancelled the commands parked in their rings, so every stop arrives
+ * from an external 'ublk del'.
+ */
+static void *ublk_teardown_fn(void *data)
+{
+	struct ublk_dev *dev = data;
+	sigset_t set;
+	int sig;
+
+	sigemptyset(&set);
+	sigaddset(&set, SIGINT);
+	sigaddset(&set, SIGTERM);
+
+	if (sigwait(&set, &sig))
+		return NULL;
+
+	/*
+	 * Deleting our own device: every command parked in our rings is a
+	 * reference on the ublkc file, and they only go when we exit, which
+	 * we cannot do until this returns.
+	 */
+	ublk_ctrl_del_dev(dev);
+	return NULL;
+}
+
 static __attribute__((noinline)) int __ublk_io_handler_fn(struct ublk_thread_info *info)
 {
 	struct ublk_thread t = {
@@ -1414,8 +1442,10 @@ static int ublk_start_daemon(const struct dev_ctx *ctx, struct ublk_dev *dev)
 	cpu_set_t *affinity_buf;
 	unsigned char (*q_thread_map)[UBLK_MAX_QUEUES] = NULL;
 	uint64_t stop_val = 1;
-	pthread_t listener;
+	pthread_t listener, teardown;
+	bool teardown_started = false;
 	void *thread_ret;
+	sigset_t set;
 	sem_t ready;
 	int ret, i;
 
@@ -1424,6 +1454,17 @@ static int ublk_start_daemon(const struct dev_ctx *ctx, struct ublk_dev *dev)
 	tinfo = calloc(sizeof(struct ublk_thread_info), dev->nthreads);
 	if (!tinfo)
 		return -ENOMEM;
+
+	if (ctx->self_del) {
+		/*
+		 * Block the two signals before any IO thread exists, so they
+		 * inherit the mask and only the sigwait() thread sees them.
+		 */
+		sigemptyset(&set);
+		sigaddset(&set, SIGINT);
+		sigaddset(&set, SIGTERM);
+		pthread_sigmask(SIG_BLOCK, &set, NULL);
+	}
 
 	sem_init(&ready, 0, 0);
 	ret = ublk_dev_prep(ctx, dev);
@@ -1526,6 +1567,11 @@ static int ublk_start_daemon(const struct dev_ctx *ctx, struct ublk_dev *dev)
 		ublk_ctrl_dump(dev);
 	else
 		ublk_send_dev_event(ctx, dev, dev->dev_info.dev_id);
+
+	/* only once the device is live is there anything to tear down */
+	if (ctx->self_del)
+		teardown_started = !pthread_create(&teardown, NULL,
+						   ublk_teardown_fn, dev);
 fail_start:
 	/*
 	 * Wait for I/O threads to exit. While waiting, a listener
@@ -1550,6 +1596,10 @@ fail_start:
 		ublk_shmem_sock_destroy(dinfo->dev_id, linfo.sock_fd);
 	}
 	ublk_shmem_unregister_all();
+
+	if (teardown_started)
+		pthread_join(teardown, NULL);
+
 	free(tinfo);
  fail:
 	for (i = 0; i < dinfo->nr_hw_queues; i++)
@@ -2148,6 +2198,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--bad_buf_index] fail auto buffer registration where no fallback was asked for\n");
 	printf("\t[--io_desc_size SIZE]\n");
 	printf("\t[--hold_io_on_signal] SIGUSR1 holds fetched requests in the server, SIGUSR2 completes them\n");
+	printf("\t[--self_del] delete our own device on SIGINT/SIGTERM\n");
 	printf("\t[--hold_io] never complete a fetched request, leaving the tag owned by the server\n");
 	printf("\t[target options] [backfile1] [backfile2] ...\n");
 	printf("\tdefault: nr_queues=2(max 32), depth=128(max 1024), dev_id=-1(auto allocation)\n");
@@ -2230,6 +2281,7 @@ int main(int argc, char *argv[])
 		{ "defer_fetch_queue",	1,	NULL,  0 },
 		{ "batch",              0,      NULL, 'b'},
 		{ "rotate_auto_buf",	0,	NULL,  0 },
+		{ "self_del",		0,	NULL,  0 },
 		{ "hold_io",		0,	NULL,  0 },
 		{ "no_auto_part_scan",	0,	NULL,  0 },
 		{ "shmem_zc",		0,	NULL,  0  },
@@ -2393,6 +2445,8 @@ int main(int argc, char *argv[])
 				ctx.defer_fetch_queue = strtol(optarg, NULL, 10);
 			if (!strcmp(longopts[option_idx].name, "no_auto_part_scan"))
 				ctx.flags |= UBLK_F_NO_AUTO_PART_SCAN;
+			if (!strcmp(longopts[option_idx].name, "self_del"))
+				ctx.self_del = 1;
 			if (!strcmp(longopts[option_idx].name, "hold_io"))
 				ctx.hold_io = 1;
 			if (!strcmp(longopts[option_idx].name, "shmem_zc"))
