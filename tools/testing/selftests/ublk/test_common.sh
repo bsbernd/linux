@@ -235,6 +235,86 @@ _ublk_run_del_mid_io() {
 	return $res
 }
 
+# Wait for the read to be started in the driver: del_gendisk() waits only for that.
+# Usage: _ublk_wait_read_inflight <dev_id> <deadline>
+_ublk_wait_read_inflight() {
+	local dev_id=$1
+	local reads
+	local writes
+	local secs=0
+
+	while [ "$secs" -lt "$2" ]; do
+		read -r reads writes < /sys/block/ublkb"${dev_id}"/inflight
+		if [ "$reads" -gt 0 ]; then
+			return 0
+		fi
+		sleep 1
+		secs=$((secs + 1))
+	done
+	return 1
+}
+
+# Quiesce a device and bring it back. A quiesce that never returns is one of
+# the failures this covers, so the state is waited for rather than assumed.
+# Usage: _ublk_quiesce_and_recover <dev_id> <add args...>
+_ublk_quiesce_and_recover() {
+	local dev_id=$1
+	local state
+
+	shift 1
+	state=$(__ublk_quiesce_dev "${dev_id}" "QUIESCED")
+	if [ "$state" != "QUIESCED" ]; then
+		echo "dev ${dev_id} isn't quiesced(${state:-quiesce failed})"
+		return 1
+	fi
+
+	state=$(_recover_ublk_dev -n "${dev_id}" "$@")
+	if [ "$state" != "LIVE" ]; then
+		echo "dev ${dev_id} isn't recovered($state)"
+		return 1
+	fi
+	return 0
+}
+
+# Quiesce a device and bring it back, over and over, with IO running against
+# it the whole time.
+# Usage: _ublk_run_quiesce_cycles <cycles> <runtime> <add args...>
+_ublk_run_quiesce_cycles() {
+	local cycles=$1
+	local runtime=$2
+	local dev_id
+	local fio_pid
+	local cycle
+	local res=0
+
+	shift 2
+	dev_id=$(_add_ublk_dev "$@")
+	_check_add_dev "$TID" $?
+
+	fio --name=job1 --filename=/dev/ublkb"${dev_id}" --ioengine=libaio \
+		--rw=randrw --norandommap --iodepth=256 --bs=4k --numjobs=4 \
+		--runtime="${runtime}" --time_based > /dev/null 2>&1 &
+	fio_pid=$!
+
+	for ((cycle = 0; cycle < cycles; cycle++)); do
+		# QUIESCE_DEV leaves the server live, so it keeps committing
+		# results and fetching again while the cancel pass walks the
+		# tags; land each cycle at a different point in that
+		sleep 0.$((RANDOM % 9 + 1))
+
+		if ! _ublk_quiesce_and_recover "${dev_id}" "$@"; then
+			res=1
+			break
+		fi
+	done
+
+	kill -9 $fio_pid > /dev/null 2>&1
+	wait $fio_pid > /dev/null 2>&1
+
+	_ublk_del_dev_timeout "${dev_id}" || res=1
+	return $res
+}
+
 _prep_test() {
 	_check_root
 	local type=$1

@@ -99,6 +99,7 @@ struct dev_ctx {
 	unsigned int	no_auto_part_scan:1;
 	unsigned int	rdonly_shmem_buf:1;
 	unsigned int	rotate_auto_buf:1;
+	unsigned int	hold_io_on_signal:1;
 	__u32 integrity_flags;
 	__u8 metadata_size;
 	__u8 pi_offset;
@@ -145,6 +146,7 @@ struct ublk_io {
 #define UBLKS_IO_FREE			(1UL << 2)
 #define UBLKS_IO_NEED_GET_DATA           (1UL << 3)
 #define UBLKS_IO_NEED_REG_BUF            (1UL << 4)
+#define UBLKS_IO_HELD			(1UL << 5)
 	unsigned short flags;
 	unsigned short refs;		/* used by target code only */
 
