@@ -905,6 +905,54 @@ static inline void ublksrv_handle_tgt_cqe(struct ublk_thread *t,
 		q->tgt_ops->tgt_io_done(t, q, cqe);
 }
 
+/*
+ * --hold_io_on_signal: after SIGUSR1 a fetched request is not handed to the
+ * target, so its tag stays UBLK_IO_FLAG_OWNED_BY_SRV; SIGUSR2 hands the held
+ * requests over. Until then they keep the IO thread running.
+ */
+static struct {
+	volatile sig_atomic_t armed;
+	volatile sig_atomic_t release;
+} ublk_hold_io;
+
+static void ublk_hold_io_signal(int sig)
+{
+	if (sig == SIGUSR1)
+		ublk_hold_io.armed = 1;
+	else
+		ublk_hold_io.release = 1;
+}
+
+/* Called after the IO threads exist, so only they take the two signals. */
+static void ublk_setup_usr_signals(void (*handler)(int))
+{
+	sigset_t set;
+
+	signal(SIGUSR1, handler);
+	signal(SIGUSR2, handler);
+	sigemptyset(&set);
+	sigaddset(&set, SIGUSR1);
+	sigaddset(&set, SIGUSR2);
+	pthread_sigmask(SIG_BLOCK, &set, NULL);
+}
+
+static void ublk_release_held_io(struct ublk_thread *t)
+{
+	struct ublk_queue *q = &t->dev->q[0];
+	int tag;
+
+	if (!ublk_hold_io.release)
+		return;
+
+	for (tag = 0; tag < q->q_depth; tag++) {
+		if (!(q->ios[tag].flags & UBLKS_IO_HELD))
+			continue;
+		q->ios[tag].flags &= ~UBLKS_IO_HELD;
+		t->io_inflight--;
+		q->tgt_ops->queue_io(t, q, tag);
+	}
+}
+
 static void ublk_handle_uring_cmd(struct ublk_thread *t,
 				  struct ublk_queue *q,
 				  const struct io_uring_cqe *cqe)
@@ -927,7 +975,11 @@ static void ublk_handle_uring_cmd(struct ublk_thread *t,
 		if (ublk_queue_use_user_copy(q))
 			ublk_user_copy(io, UBLK_IO_OP_WRITE);
 
-		if (q->tgt_ops->queue_io)
+		if (ublk_hold_io.armed && !ublk_hold_io.release) {
+			/* counted, so an ABORT on the other tags does not end the thread */
+			io->flags |= UBLKS_IO_HELD;
+			t->io_inflight++;
+		} else if (q->tgt_ops->queue_io)
 			q->tgt_ops->queue_io(t, q, tag);
 	} else if (cqe->res == UBLK_IO_RES_NEED_GET_DATA) {
 		io->flags |= UBLKS_IO_NEED_GET_DATA | UBLKS_IO_FREE;
@@ -1095,6 +1147,7 @@ static __attribute__((noinline)) int __ublk_io_handler_fn(struct ublk_thread_inf
 	do {
 		if (ublk_process_io(&t) < 0)
 			break;
+		ublk_release_held_io(&t);
 	} while (1);
 
 	ublk_dbg(UBLK_DBG_THREAD, "tid %d: ublk dev %d thread %d exiting\n",
@@ -1537,6 +1590,9 @@ static int ublk_start_daemon(const struct dev_ctx *ctx, struct ublk_dev *dev)
 				ublk_io_handler_fn,
 				&tinfo[i]);
 	}
+
+	if (ctx->hold_io_on_signal)
+		ublk_setup_usr_signals(ublk_hold_io_signal);
 
 	for (i = 0; i < dev->nthreads; i++)
 		sem_wait(&ready);
@@ -2182,6 +2238,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 		 "[--pi_offset OFFSET] [--csum_type ip|t10dif|nvme] [--tag_size SIZE]\n");
 	printf("\t[--batch|-b] [--rotate_auto_buf] [--no_auto_part_scan]\n");
 	printf("\t[--io_desc_size SIZE]\n");
+	printf("\t[--hold_io_on_signal] SIGUSR1 holds fetched requests in the server, SIGUSR2 completes them\n");
 	printf("\t[target options] [backfile1] [backfile2] ...\n");
 	printf("\tdefault: nr_queues=2(max 32), depth=128(max 1024), dev_id=-1(auto allocation)\n");
 	printf("\tdefault: nthreads=nr_queues");
@@ -2264,6 +2321,7 @@ int main(int argc, char *argv[])
 		{ "htlb",		1,	NULL,  0  },
 		{ "rdonly_shmem_buf",	0,	NULL,  0  },
 		{ "io_desc_size",	1,	NULL,  0  },
+		{ "hold_io_on_signal",	0,	NULL,  0  },
 		{ "zoned",		0,	NULL,  0  },
 		{ "param_types",	1,	NULL,  0  },
 		{ "logical_bs_shift",	1,	NULL,  0  },
@@ -2417,6 +2475,8 @@ int main(int argc, char *argv[])
 				ctx.flags |= UBLK_F_IO_DESC_SIZE;
 				ctx.io_desc_size = strtoul(optarg, NULL, 0);
 			}
+			if (!strcmp(longopts[option_idx].name, "hold_io_on_signal"))
+				ctx.hold_io_on_signal = 1;
 			if (!strcmp(longopts[option_idx].name, "zoned"))
 				ctx.flags |= UBLK_F_ZONED;
 			if (!strcmp(longopts[option_idx].name, "param_types")) {
@@ -2518,6 +2578,14 @@ int main(int argc, char *argv[])
 	    !((ctx.flags & UBLK_F_AUTO_BUF_REG) &&
 	      (ctx.flags & UBLK_F_BATCH_IO))) {
 		ublk_err("rotate_auto_buf requires --auto_zc and --batch\n");
+		return -EINVAL;
+	}
+
+	/* the held requests are released on queue 0 by the one IO thread */
+	if (ctx.hold_io_on_signal &&
+	    (ctx.nr_hw_queues != 1 || ctx.nthreads > 1 ||
+	     (ctx.flags & UBLK_F_BATCH_IO))) {
+		ublk_err("hold_io_on_signal needs one queue, one thread, no batch\n");
 		return -EINVAL;
 	}
 
