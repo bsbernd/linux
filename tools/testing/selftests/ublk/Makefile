@@ -81,6 +81,7 @@ TEST_PROGS += test_teardown_cancel_race.sh
 TEST_PROGS += test_teardown_user_copy.sh
 TEST_PROGS += test_teardown_quiesce_repark.sh
 TEST_PROGS += test_teardown_get_data.sh
+TEST_PROGS += test_teardown_force_abort.sh
 
 TEST_FILES := settings
 
