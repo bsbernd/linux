@@ -320,6 +320,49 @@ _ublk_wait_daemon_gone() {
 	return 0
 }
 
+# Signal a server into taking its own device down. Whatever it does with its
+# own rings, the driver must be left with neither a device nothing can
+# delete nor a task nothing can kill.
+# Usage: _ublk_run_signal_teardown <sig> <bs> <rw> <jobs> <runtime> <add args...>
+_ublk_run_signal_teardown() {
+	local sig=$1
+	local bs=$2
+	local rw=$3
+	local jobs=$4
+	local runtime=$5
+	local dev_id
+	local daemon_pid
+	local fio_pid
+	local res=0
+
+	shift 5
+	dev_id=$(_add_ublk_dev "$@")
+	_check_add_dev "$TID" $?
+	daemon_pid=$(_get_ublk_daemon_pid "${dev_id}")
+
+	fio --name=job1 --filename=/dev/ublkb"${dev_id}" --ioengine=libaio \
+		--rw="${rw}" --norandommap --iodepth=64 --bs="${bs}" \
+		--numjobs="${jobs}" --runtime="${runtime}" --time_based \
+		> /dev/null 2>&1 &
+	fio_pid=$!
+
+	# the signal has to reach the server while it still has commands in
+	# its rings, at a different point each iteration
+	sleep 0.$((RANDOM % 9 + 1))
+	kill -"$sig" "${daemon_pid}" > /dev/null 2>&1
+
+	# a server that leaves its rings live keeps /dev/ublkcN open and waits
+	# to be killed from outside, so the kill has to come before the delete
+	# rather than after it: the delete waits on that reference
+	sleep 1
+	kill -9 "${daemon_pid}" > /dev/null 2>&1
+
+	_ublk_del_dev_timeout "${dev_id}" || res=1
+	_ublk_wait_fio "$fio_pid" $((runtime + 60)) || res=1
+	_ublk_wait_daemon_gone "${daemon_pid}" 30 || res=1
+	return $res
+}
+
 # Quiesce a device and bring it back. A quiesce that never returns is one of
 # the failures this covers, so the state is waited for rather than assumed.
 # Usage: _ublk_quiesce_and_recover <dev_id> <add args...>
