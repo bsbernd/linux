@@ -75,6 +75,8 @@ TEST_PROGS += test_stress_07.sh
 TEST_PROGS += test_stress_08.sh
 TEST_PROGS += test_stress_09.sh
 
+TEST_PROGS += test_teardown_cancel_race.sh
+
 TEST_FILES := settings
 TEST_FILES += test_common.sh
 TEST_FILES += trace
