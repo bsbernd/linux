@@ -103,6 +103,7 @@ TEST_PROGS += test_teardown_stop_refused_tw.sh
 TEST_PROGS += test_teardown_stop_tw_handback.sh
 TEST_PROGS += test_teardown_abandon_ring.sh
 TEST_PROGS += test_teardown_self_del.sh
+TEST_PROGS += test_teardown_union_split.sh
 
 TEST_FILES := settings
 TEST_FILES += test_common.sh
