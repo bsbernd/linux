@@ -72,6 +72,8 @@ TEST_PROGS += test_stress_07.sh
 TEST_PROGS += test_stress_08.sh
 TEST_PROGS += test_stress_09.sh
 
+TEST_PROGS += test_teardown_debugfs_tags.sh
+
 TEST_FILES := settings
 
 TEST_GEN_PROGS_EXTENDED = kublk metadata_size

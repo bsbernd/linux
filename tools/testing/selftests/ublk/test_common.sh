@@ -130,6 +130,17 @@ _get_ublk_daemon_pid() {
 	${UBLK_PROG} list -n "$1" | grep "pid" | awk '{print $7}'
 }
 
+# Echo the driver's debugfs root, or fail when the kernel was built without
+# CONFIG_DEBUG_FS or debugfs is not mounted.
+_ublk_debugfs_root() {
+	local mnt
+
+	mnt=$(awk '$3 == "debugfs" { print $2; exit }' /proc/mounts)
+	[ -z "$mnt" ] && return 1
+	[ -d "${mnt}/ublk" ] || return 1
+	echo "${mnt}/ublk"
+}
+
 _prep_test() {
 	_check_root
 	local type=$1
