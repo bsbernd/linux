@@ -106,6 +106,7 @@ struct dev_ctx {
 	unsigned int	bad_fetch_buf:1;
 	unsigned int	rotate_auto_buf:1;
 	unsigned int	hold_io_on_signal:1;
+	unsigned int	hold_io:1;
 	__u32 integrity_flags;
 	__u8 metadata_size;
 	__u8 pi_offset;
@@ -295,6 +296,7 @@ struct ublk_dev {
 	unsigned bad_fetch_buf;
 	unsigned nthreads;
 	unsigned per_io_tasks;
+	unsigned hold_io;
 
 	int fds[MAX_BACK_FILES + 1];	/* fds[0] points to /dev/ublkcN */
 	int nr_fds;

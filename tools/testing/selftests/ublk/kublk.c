@@ -978,11 +978,15 @@ static void ublk_handle_uring_cmd(struct ublk_thread *t,
 		if (ublk_queue_use_user_copy(q))
 			ublk_user_copy(io, UBLK_IO_OP_WRITE);
 
+		/*
+		 * --hold_io: never complete what we fetched, so the tag stays
+		 * UBLK_IO_FLAG_OWNED_BY_SRV and teardown has to deal with it
+		 */
 		if (ublk_hold_io.armed && !ublk_hold_io.release) {
 			/* counted, so an ABORT on the other tags does not end the thread */
 			io->flags |= UBLKS_IO_HELD;
 			t->io_inflight++;
-		} else if (q->tgt_ops->queue_io)
+		} else if (q->tgt_ops->queue_io && !t->dev->hold_io)
 			q->tgt_ops->queue_io(t, q, tag);
 	} else if (cqe->res == UBLK_IO_RES_NEED_GET_DATA) {
 		io->flags |= UBLKS_IO_NEED_GET_DATA | UBLKS_IO_FREE;
@@ -2007,6 +2011,7 @@ static int __cmd_dev_add(const struct dev_ctx *ctx)
 	dev->per_io_tasks = ctx->per_io_tasks;
 	dev->bad_buf_index = ctx->bad_buf_index;
 	dev->bad_fetch_buf = ctx->bad_fetch_buf;
+	dev->hold_io = ctx->hold_io;
 	dev->tgt.ops = ops;
 	dev->tgt.sq_depth = depth;
 	dev->tgt.cq_depth = depth;
@@ -2418,6 +2423,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--bad_fetch_buf] fail every batch fetch in copy_to_user, no re-fetch\n");
 	printf("\t[--io_desc_size SIZE]\n");
 	printf("\t[--hold_io_on_signal] SIGUSR1 holds fetched requests in the server, SIGUSR2 completes them\n");
+	printf("\t[--hold_io] never complete a fetched request, leaving the tag owned by the server\n");
 	printf("\t[target options] [backfile1] [backfile2] ...\n");
 	printf("\tdefault: nr_queues=2(max 32), depth=128(max 1024), dev_id=-1(auto allocation)\n");
 	printf("\tdefault: nthreads=nr_queues");
@@ -2499,6 +2505,7 @@ int main(int argc, char *argv[])
 		{ "park_on_signal",	0,	NULL,  0 },
 		{ "batch",              0,      NULL, 'b'},
 		{ "rotate_auto_buf",	0,	NULL,  0 },
+		{ "hold_io",		0,	NULL,  0 },
 		{ "no_auto_part_scan",	0,	NULL,  0 },
 		{ "shmem_zc",		0,	NULL,  0  },
 		{ "htlb",		1,	NULL,  0  },
@@ -2661,6 +2668,8 @@ int main(int argc, char *argv[])
 			}
 			if (!strcmp(longopts[option_idx].name, "no_auto_part_scan"))
 				ctx.flags |= UBLK_F_NO_AUTO_PART_SCAN;
+			if (!strcmp(longopts[option_idx].name, "hold_io"))
+				ctx.hold_io = 1;
 			if (!strcmp(longopts[option_idx].name, "shmem_zc"))
 				ctx.flags |= UBLK_F_SHMEM_ZC;
 			if (!strcmp(longopts[option_idx].name, "htlb"))
