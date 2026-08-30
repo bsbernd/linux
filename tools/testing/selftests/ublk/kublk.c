@@ -927,7 +927,11 @@ static void ublk_handle_uring_cmd(struct ublk_thread *t,
 		if (ublk_queue_use_user_copy(q))
 			ublk_user_copy(io, UBLK_IO_OP_WRITE);
 
-		if (q->tgt_ops->queue_io)
+		/*
+		 * --hold_io: never complete what we fetched, so the tag stays
+		 * UBLK_IO_FLAG_OWNED_BY_SRV and teardown has to deal with it
+		 */
+		if (q->tgt_ops->queue_io && !t->dev->hold_io)
 			q->tgt_ops->queue_io(t, q, tag);
 	} else if (cqe->res == UBLK_IO_RES_NEED_GET_DATA) {
 		io->flags |= UBLKS_IO_NEED_GET_DATA | UBLKS_IO_FREE;
@@ -1894,6 +1898,7 @@ static int __cmd_dev_add(const struct dev_ctx *ctx)
 	dev->nthreads = nthreads;
 	dev->per_io_tasks = ctx->per_io_tasks;
 	dev->bad_buf_index = ctx->bad_buf_index;
+	dev->hold_io = ctx->hold_io;
 	dev->tgt.ops = ops;
 	dev->tgt.sq_depth = depth;
 	dev->tgt.cq_depth = depth;
@@ -2298,6 +2303,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--io_desc_size SIZE]\n");
 	printf("\t[--clean_teardown] stop the device on SIGINT/SIGTERM and let the driver cancel\n");
 	printf("\t[--abandon_ring] leave the rings on SIGINT/SIGTERM without stopping the device\n");
+	printf("\t[--hold_io] never complete a fetched request, leaving the tag owned by the server\n");
 	printf("\t[target options] [backfile1] [backfile2] ...\n");
 	printf("\tdefault: nr_queues=2(max 32), depth=128(max 1024), dev_id=-1(auto allocation)\n");
 	printf("\tdefault: nthreads=nr_queues");
@@ -2377,6 +2383,7 @@ int main(int argc, char *argv[])
 		{ "rotate_auto_buf",	0,	NULL,  0 },
 		{ "clean_teardown",	0,	NULL,  0 },
 		{ "abandon_ring",	0,	NULL,  0 },
+		{ "hold_io",		0,	NULL,  0 },
 		{ "no_auto_part_scan",	0,	NULL,  0 },
 		{ "shmem_zc",		0,	NULL,  0  },
 		{ "htlb",		1,	NULL,  0  },
@@ -2530,6 +2537,8 @@ int main(int argc, char *argv[])
 				ctx.clean_teardown = 1;
 			if (!strcmp(longopts[option_idx].name, "abandon_ring"))
 				ctx.abandon_ring = 1;
+			if (!strcmp(longopts[option_idx].name, "hold_io"))
+				ctx.hold_io = 1;
 			if (!strcmp(longopts[option_idx].name, "shmem_zc"))
 				ctx.flags |= UBLK_F_SHMEM_ZC;
 			if (!strcmp(longopts[option_idx].name, "htlb"))

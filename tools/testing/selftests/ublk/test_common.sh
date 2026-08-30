@@ -273,6 +273,30 @@ _ublk_wait_tag_flag_gone() {
 	return 1
 }
 
+# Wait for a per-tag flag to appear. Unlike the "gone" case, a caller here is
+# about to test what teardown does with that state, so a missing debugfs must
+# not read as success -- the caller checks _ublk_debugfs_root and skips.
+# Usage: _ublk_wait_tag_flag_present <dev_id> <flag> <deadline>
+_ublk_wait_tag_flag_present() {
+	local dev_id=$1
+	local flag=$2
+	local deadline=$3
+	local dir
+	local secs=0
+
+	dir=$(_ublk_debugfs_root) || return 1
+	[ -f "${dir}/${dev_id}/tags" ] || return 1
+
+	while [ "$secs" -lt "$deadline" ]; do
+		grep -q "$flag" "${dir}/${dev_id}/tags" && return 0
+		sleep 1
+		secs=$((secs + 1))
+	done
+
+	echo "dev ${dev_id} has no ${flag} tag after ${deadline}s"
+	return 1
+}
+
 # A server the driver will not let go of outlives the device it served, and
 # a SIGKILL that does not land is the clearest form of that.
 _ublk_wait_daemon_gone() {
