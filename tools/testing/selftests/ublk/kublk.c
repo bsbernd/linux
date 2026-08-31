@@ -1108,6 +1108,10 @@ static void ublk_refetch_on_signal(struct ublk_thread *t)
 	pthread_sigmask(SIG_SETMASK, &old, NULL);
 	ublk_refetch_state = UBLK_REFETCH_IDLE;
 
+	/* --park_on_signal: SIGUSR2 only resumes reaping */
+	if (t->dev->park_on_signal)
+		return;
+
 	io->flags = UBLKS_IO_FREE | UBLKS_IO_NEED_FETCH_RQ;
 	ublk_queue_io_cmd(t, io);
 	io_uring_submit(&t->ring);
@@ -1924,11 +1928,13 @@ static int __cmd_dev_add(const struct dev_ctx *ctx)
 		info->flags |= UBLK_F_QUIESCE;
 	dev->nthreads = nthreads;
 	dev->per_io_tasks = ctx->per_io_tasks;
+	dev->bad_buf_index = ctx->bad_buf_index;
 	dev->tgt.ops = ops;
 	dev->tgt.sq_depth = depth;
 	dev->tgt.cq_depth = depth;
 	dev->refetch_on_signal = ctx->refetch_on_signal;
 	dev->refetch_unready = ctx->refetch_unready;
+	dev->park_on_signal = ctx->park_on_signal;
 
 	for (i = 0; i < MAX_BACK_FILES; i++) {
 		if (ctx->files[i]) {
@@ -2325,9 +2331,11 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--nthreads threads] [--per_io_tasks]\n");
 	printf("\t[--refetch_on_signal] SIGUSR1 stops reaping, SIGUSR2 sends FETCH_REQ on tag 0\n");
 	printf("\t[--refetch_unready] with --refetch_on_signal: tags 0 and 1 unfetched, no reaping after SIGUSR2\n");
+	printf("\t[--park_on_signal] SIGUSR1 stops reaping, SIGUSR2 resumes it\n");
 	printf("\t[--integrity_capable] [--integrity_reftag] [--metadata_size SIZE] "
 		 "[--pi_offset OFFSET] [--csum_type ip|t10dif|nvme] [--tag_size SIZE]\n");
 	printf("\t[--batch|-b] [--rotate_auto_buf] [--no_auto_part_scan]\n");
+	printf("\t[--bad_buf_index] fail auto buffer registration where no fallback was asked for\n");
 	printf("\t[--io_desc_size SIZE]\n");
 	printf("\t[--hold_io_on_signal] SIGUSR1 holds fetched requests in the server, SIGUSR2 completes them\n");
 	printf("\t[target options] [backfile1] [backfile2] ...\n");
@@ -2407,12 +2415,14 @@ int main(int argc, char *argv[])
 		{ "safe",		0,	NULL,  0 },
 		{ "refetch_on_signal",	0,	NULL,  0 },
 		{ "refetch_unready",	0,	NULL,  0 },
+		{ "park_on_signal",	0,	NULL,  0 },
 		{ "batch",              0,      NULL, 'b'},
 		{ "rotate_auto_buf",	0,	NULL,  0 },
 		{ "no_auto_part_scan",	0,	NULL,  0 },
 		{ "shmem_zc",		0,	NULL,  0  },
 		{ "htlb",		1,	NULL,  0  },
 		{ "rdonly_shmem_buf",	0,	NULL,  0  },
+		{ "bad_buf_index",	0,	NULL,  0  },
 		{ "io_desc_size",	1,	NULL,  0  },
 		{ "hold_io_on_signal",	0,	NULL,  0  },
 		{ "zoned",		0,	NULL,  0  },
@@ -2560,6 +2570,11 @@ int main(int argc, char *argv[])
 				ctx.refetch_on_signal = 1;
 			if (!strcmp(longopts[option_idx].name, "refetch_unready"))
 				ctx.refetch_unready = 1;
+			/* the park of --refetch_on_signal, without its FETCH_REQ */
+			if (!strcmp(longopts[option_idx].name, "park_on_signal")) {
+				ctx.refetch_on_signal = 1;
+				ctx.park_on_signal = 1;
+			}
 			if (!strcmp(longopts[option_idx].name, "no_auto_part_scan"))
 				ctx.flags |= UBLK_F_NO_AUTO_PART_SCAN;
 			if (!strcmp(longopts[option_idx].name, "shmem_zc"))
@@ -2568,6 +2583,8 @@ int main(int argc, char *argv[])
 				ctx.htlb_path = strdup(optarg);
 			if (!strcmp(longopts[option_idx].name, "rdonly_shmem_buf"))
 				ctx.rdonly_shmem_buf = 1;
+			if (!strcmp(longopts[option_idx].name, "bad_buf_index"))
+				ctx.bad_buf_index = 1;
 			if (!strcmp(longopts[option_idx].name, "io_desc_size")) {
 				ctx.flags |= UBLK_F_IO_DESC_SIZE;
 				ctx.io_desc_size = strtoul(optarg, NULL, 0);

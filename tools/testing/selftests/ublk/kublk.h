@@ -96,10 +96,12 @@ struct dev_ctx {
 	unsigned int	per_io_tasks:1;
 	unsigned int	refetch_on_signal:1;
 	unsigned int	refetch_unready:1;
+	unsigned int	park_on_signal:1;
 	unsigned int	no_ublk_fixed_fd:1;
 	unsigned int	safe_stop:1;
 	unsigned int	no_auto_part_scan:1;
 	unsigned int	rdonly_shmem_buf:1;
+	unsigned int	bad_buf_index:1;
 	unsigned int	rotate_auto_buf:1;
 	unsigned int	hold_io_on_signal:1;
 	__u32 integrity_flags;
@@ -285,6 +287,7 @@ struct ublk_dev {
 	struct ublk_tgt tgt;
 	struct ublksrv_ctrl_dev_info  dev_info;
 	struct ublk_queue q[UBLK_MAX_QUEUES];
+	unsigned bad_buf_index;
 	unsigned nthreads;
 	unsigned per_io_tasks;
 
@@ -294,6 +297,7 @@ struct ublk_dev {
 	struct io_uring ring;
 	unsigned refetch_on_signal;
 	unsigned refetch_unready;
+	unsigned park_on_signal;
 
 	void *private_data;
 };

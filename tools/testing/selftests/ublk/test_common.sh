@@ -854,6 +854,26 @@ _ublk_wait_tags_parked() {
 	return 1
 }
 
+# inflight counts started requests only, so 1 means the read is started
+# Usage: _ublk_wait_reads_inflight <dev_id> <reads> <deadline>
+_ublk_wait_reads_inflight() {
+	local dev_id=$1
+	local want=$2
+	local reads
+	local writes
+	local secs=0
+
+	while [ "$secs" -lt "$3" ]; do
+		read -r reads writes < /sys/block/ublkb"${dev_id}"/inflight
+		if [ "$reads" -eq "$want" ] && [ "$writes" -eq 0 ]; then
+			return 0
+		fi
+		sleep 1
+		secs=$((secs + 1))
+	done
+	return 1
+}
+
 UBLK_PROG=$(_ublk_test_top_dir)/kublk
 UBLK_TEST_QUIET=1
 UBLK_TEST_SHOW_RESULT=1
