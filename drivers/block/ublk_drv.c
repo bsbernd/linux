@@ -2351,8 +2351,12 @@ static enum blk_eh_timer_return ublk_timeout(struct request *rq)
 	return BLK_EH_DONE;
 }
 
+/*
+ * @canceling reports a canceling queue to a caller that requeues the request
+ * rather than failing it. NULL means fail it.
+ */
 static blk_status_t ublk_prep_req(struct ublk_queue *ubq, struct request *rq,
-				  bool check_cancel)
+				  bool *canceling)
 {
 	struct ublk_io *io = &ubq->ios[rq->tag];
 
@@ -2372,8 +2376,22 @@ static blk_status_t ublk_prep_req(struct ublk_queue *ubq, struct request *rq,
 	    unlikely(READ_ONCE(ubq->force_abort)))
 		return BLK_STS_IOERR;
 
-	if (check_cancel && unlikely(ubq->canceling))
-		return BLK_STS_IOERR;
+	/*
+	 * ->canceling has to be handled after ->force_abort and ->fail_io
+	 * is dealt with, otherwise this request may not be failed in case
+	 * of recovery, and cause hang when deleting disk
+	 *
+	 * It also has to be handled before the tag is marked: ublk_cancel_cmd()
+	 * skips a marked tag, and UBLK_CMD_QUIESCE_DEV walks each tag once, so
+	 * a tag marked for a request that is only going to be aborted keeps a
+	 * parked command nothing comes back to complete.
+	 */
+	if (unlikely(READ_ONCE(ubq->canceling))) {
+		if (!canceling)
+			return BLK_STS_IOERR;
+		*canceling = true;
+		return BLK_STS_OK;
+	}
 
 	/* fill iod to slot in io cmd buffer */
 	if (unlikely(!ublk_validate_req(ubq, rq)))
@@ -2395,20 +2413,16 @@ static inline blk_status_t __ublk_queue_rq_common(struct ublk_queue *ubq,
 						   struct request *rq,
 						   bool *should_queue)
 {
+	bool canceling = false;
 	blk_status_t res;
 
-	res = ublk_prep_req(ubq, rq, false);
+	res = ublk_prep_req(ubq, rq, &canceling);
 	if (res != BLK_STS_OK) {
 		*should_queue = false;
 		return res;
 	}
 
-	/*
-	 * ->canceling has to be handled after ->force_abort and ->fail_io
-	 * is dealt with, otherwise this request may not be failed in case
-	 * of recovery, and cause hang when deleting disk
-	 */
-	if (unlikely(ubq->canceling)) {
+	if (unlikely(canceling)) {
 		*should_queue = false;
 		__ublk_abort_rq(ubq, rq);
 		return BLK_STS_OK;
@@ -2491,7 +2505,7 @@ static void ublk_queue_rqs(struct rq_list *rqlist)
 		struct ublk_queue *this_q = req->mq_hctx->driver_data;
 		struct ublk_io *this_io = &this_q->ios[req->tag];
 
-		if (ublk_prep_req(this_q, req, true) != BLK_STS_OK) {
+		if (ublk_prep_req(this_q, req, NULL) != BLK_STS_OK) {
 			rq_list_add_tail(&requeue_list, req);
 			continue;
 		}
@@ -2543,7 +2557,7 @@ static void ublk_batch_queue_rqs(struct rq_list *rqlist)
 	while ((req = rq_list_pop(rqlist))) {
 		struct ublk_queue *this_q = req->mq_hctx->driver_data;
 
-		if (ublk_prep_req(this_q, req, true) != BLK_STS_OK) {
+		if (ublk_prep_req(this_q, req, NULL) != BLK_STS_OK) {
 			rq_list_add_tail(&requeue_list, req);
 			continue;
 		}
