@@ -1781,6 +1781,7 @@ static int __cmd_dev_add(const struct dev_ctx *ctx)
 		info->flags |= UBLK_F_QUIESCE;
 	dev->nthreads = nthreads;
 	dev->per_io_tasks = ctx->per_io_tasks;
+	dev->bad_buf_index = ctx->bad_buf_index;
 	dev->tgt.ops = ops;
 	dev->tgt.sq_depth = depth;
 	dev->tgt.cq_depth = depth;
@@ -2181,6 +2182,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--integrity_capable] [--integrity_reftag] [--metadata_size SIZE] "
 		 "[--pi_offset OFFSET] [--csum_type ip|t10dif|nvme] [--tag_size SIZE]\n");
 	printf("\t[--batch|-b] [--rotate_auto_buf] [--no_auto_part_scan]\n");
+	printf("\t[--bad_buf_index] fail auto buffer registration where no fallback was asked for\n");
 	printf("\t[--io_desc_size SIZE]\n");
 	printf("\t[target options] [backfile1] [backfile2] ...\n");
 	printf("\tdefault: nr_queues=2(max 32), depth=128(max 1024), dev_id=-1(auto allocation)\n");
@@ -2263,6 +2265,7 @@ int main(int argc, char *argv[])
 		{ "shmem_zc",		0,	NULL,  0  },
 		{ "htlb",		1,	NULL,  0  },
 		{ "rdonly_shmem_buf",	0,	NULL,  0  },
+		{ "bad_buf_index",	0,	NULL,  0  },
 		{ "io_desc_size",	1,	NULL,  0  },
 		{ "zoned",		0,	NULL,  0  },
 		{ "param_types",	1,	NULL,  0  },
@@ -2413,6 +2416,8 @@ int main(int argc, char *argv[])
 				ctx.htlb_path = strdup(optarg);
 			if (!strcmp(longopts[option_idx].name, "rdonly_shmem_buf"))
 				ctx.rdonly_shmem_buf = 1;
+			if (!strcmp(longopts[option_idx].name, "bad_buf_index"))
+				ctx.bad_buf_index = 1;
 			if (!strcmp(longopts[option_idx].name, "io_desc_size")) {
 				ctx.flags |= UBLK_F_IO_DESC_SIZE;
 				ctx.io_desc_size = strtoul(optarg, NULL, 0);

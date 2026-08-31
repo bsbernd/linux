@@ -98,6 +98,7 @@ struct dev_ctx {
 	unsigned int	safe_stop:1;
 	unsigned int	no_auto_part_scan:1;
 	unsigned int	rdonly_shmem_buf:1;
+	unsigned int	bad_buf_index:1;
 	unsigned int	rotate_auto_buf:1;
 	__u32 integrity_flags;
 	__u8 metadata_size;
@@ -281,6 +282,7 @@ struct ublk_dev {
 	struct ublk_tgt tgt;
 	struct ublksrv_ctrl_dev_info  dev_info;
 	struct ublk_queue q[UBLK_MAX_QUEUES];
+	unsigned bad_buf_index;
 	unsigned nthreads;
 	unsigned per_io_tasks;
 

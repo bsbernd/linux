@@ -141,6 +141,13 @@ static int ublk_null_queue_io(struct ublk_thread *t, struct ublk_queue *q,
 static unsigned short ublk_null_buf_index(const struct ublk_thread *t,
 		const struct ublk_queue *q, int tag)
 {
+	/*
+	 * --bad_buf_index fails registration where no fallback was asked for,
+	 * which is the dispatch exit that ends the request and leaves only the
+	 * parked command behind
+	 */
+	if (t->dev->bad_buf_index)
+		return (unsigned short)-1;
 	if (ublk_queue_auto_zc_fallback(q))
 		return (unsigned short)-1;
 	return ublk_io_buf_idx(t, q, tag);
