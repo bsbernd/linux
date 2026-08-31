@@ -3469,6 +3469,8 @@ static void ublk_queue_reset_io_flags(struct ublk_queue *ubq)
 {
 	spin_lock(&ubq->cancel_lock);
 	WRITE_ONCE(ubq->canceling, false);
+	/* ublk_batch_cancel_queue() set it; a re-armed queue takes IO again */
+	WRITE_ONCE(ubq->force_abort, false);
 	spin_unlock(&ubq->cancel_lock);
 	ubq->fail_io = false;
 }
