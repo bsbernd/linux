@@ -233,6 +233,39 @@ union ublk_io_buf {
 	struct ublk_auto_buf_reg auto_reg;
 };
 
+#ifdef CONFIG_DEBUG_FS
+/*
+ * Steps in a tag's life, stamped from one device-wide counter so the order
+ * across tags and against the cancel walk is readable afterwards. A last
+ * value cannot show ordering, which is what a stranded tag has to prove.
+ */
+enum ublk_tag_evt_id {
+	UBLK_TE_NONE,
+	UBLK_TE_PARK,		/* ->info: _IOC_NR of the parking op */
+	UBLK_TE_PREP_DISPATCH,	/* the tag was marked in flight */
+	UBLK_TE_QRQ_CANCELING,	/* queue_rq found the queue canceling */
+	UBLK_TE_ABORT_RQ,	/* ->info: whether a command was left parked */
+	UBLK_TE_HANDOVER,	/* ->info: whether the server got the tag */
+	UBLK_TE_UNDO,		/* ->info: ublk_check_canceling() result */
+	UBLK_TE_VISIT,		/* ->info: enum ublk_tag_visit */
+	UBLK_TE_AUTO_REG,	/* ->info: task_registered_buffers */
+	UBLK_TE_FAIL_REQ,	/* ->info: whether this side completed it */
+	UBLK_TE_REF_PUT,	/* ->info: refcount after the put */
+	UBLK_TE_TAKE_CMD,	/* ->info: whether this side took ->cmd */
+	UBLK_TE_CANCEL_FN,	/* ->info: 0 no cmd, 1 same cmd, 2 other cmd */
+};
+
+#define UBLK_TAG_EVTS	16
+
+struct ublk_tag_evt {
+	u32	seq;
+	u32	io_flags;
+	u8	id;		/* enum ublk_tag_evt_id */
+	u8	info;
+	u8	canceling;	/* ->canceling as this step read it */
+};
+#endif
+
 struct ublk_io {
 	union ublk_io_buf buf;
 	unsigned int flags;
@@ -265,6 +298,17 @@ struct ublk_io {
 
 	/* enum ublk_io_state, verification only, changed under ->lock */
 	u8 state;
+	/* debugfs only: _IOC_NR of the op that last parked ->cmd */
+	u8 park_op;
+	/* debugfs only: enum ublk_tag_visit */
+	u8 cancel_visit;
+
+#ifdef CONFIG_DEBUG_FS
+	/* kept out of the ring, which a requeue loop can age it out of */
+	struct ublk_tag_evt last_park;
+	struct ublk_tag_evt evts[UBLK_TAG_EVTS];
+	u8 evts_head;
+#endif
 } ____cacheline_aligned_in_smp;
 
 struct ublk_queue {
@@ -353,6 +397,18 @@ enum ublk_teardown_step {
 };
 
 /*
+ * How ublk_cancel_cmd() last left a tag. A command parked after its tag was
+ * visited is one nothing will complete, so a stranded tag has to be able to
+ * say which side got there first.
+ */
+enum ublk_tag_visit {
+	UBLK_TV_NONE,
+	UBLK_TV_SKIP_OWNER,	/* held no command */
+	UBLK_TV_SKIP_DISPATCH,	/* a dispatch owned it */
+	UBLK_TV_CANCELED,	/* command completed with ABORT */
+};
+
+/*
  * Counted events are the ones that only mean something compared against
  * each other: every queued task work should run, and every cancellation
  * call either completes a command or says why it did not.
@@ -385,11 +441,80 @@ struct ublk_teardown_record {
 	atomic_t	cancel_done;
 	atomic_t	cancel_skip_owner;
 	atomic_t	cancel_skip_started;
+	/* a skip that left a command parked is a tag nothing will visit again */
+	atomic_t	cancel_skip_dispatch_parked;
+
+	/* stamps struct ublk_tag_evt */
+	atomic_t	seq;
+	u32		set_canceling_seq;
+	u32		cancel_dev_start_seq;
+	u32		cancel_dev_end_seq;
+
+	/*
+	 * Widen one window on purpose, in microseconds, 0 = off.
+	 * delay_prep_cancel_us: the tag is DISPATCHING and the walk skips it;
+	 * delay_park_check_us: the command is parked and the walk cancels it.
+	 */
+	u32		delay_prep_cancel_us;
+	u32		delay_park_check_us;
 };
 
 #ifdef CONFIG_DEBUG_FS
 #define ublk_td_step(ub, step)	set_bit(step, &(ub)->teardown.steps)
 #define ublk_td_count(ub, event) atomic_inc(&(ub)->teardown.event)
+
+/* caller holds io->lock, which is what keeps the ring from tearing */
+#define ublk_td_evt_locked(ubq, io, id_, info_)				\
+do {									\
+	struct ublk_io *__io = (io);					\
+	const struct ublk_queue *__q = (ubq);				\
+	struct ublk_tag_evt __e = {					\
+		.seq	   = atomic_inc_return(&__q->dev->teardown.seq),	\
+		.io_flags  = __io->flags,				\
+		.id	   = (id_),					\
+		.info	   = (info_),					\
+		.canceling = READ_ONCE(__q->canceling),			\
+	};								\
+									\
+	__io->evts[__io->evts_head] = __e;				\
+	__io->evts_head = (__io->evts_head + 1) % UBLK_TAG_EVTS;	\
+	if ((id_) == UBLK_TE_PARK)					\
+		__io->last_park = __e;					\
+} while (0)
+
+#define ublk_td_evt(ubq, io, id_, info_)				\
+do {									\
+	ublk_io_lock(io);						\
+	ublk_td_evt_locked(ubq, io, id_, info_);			\
+	ublk_io_unlock(io);						\
+} while (0)
+
+#define ublk_td_seq(ub, field)						\
+	((ub)->teardown.field = atomic_inc_return(&(ub)->teardown.seq))
+
+/*
+ * Forced window: spin, so it works in the queue_rq path too, and only while
+ * the queue is canceling, which is the only time the tag walk can land in it.
+ */
+#define ublk_td_delay(ubq, field)					\
+do {									\
+	u32 __us = READ_ONCE((ubq)->dev->teardown.field);		\
+									\
+	if (unlikely(__us) && READ_ONCE((ubq)->canceling))		\
+		udelay(__us);						\
+} while (0)
+
+#define ublk_td_park(ubq, io, op)					\
+do {									\
+	WRITE_ONCE((io)->park_op, (op));				\
+	ublk_td_evt(ubq, io, UBLK_TE_PARK, (op));			\
+} while (0)
+
+#define ublk_td_visit(ubq, io, how)					\
+do {									\
+	WRITE_ONCE((io)->cancel_visit, (how));				\
+	ublk_td_evt_locked(ubq, io, UBLK_TE_VISIT, (how));		\
+} while (0)
 
 #define ublk_td_closed(ub, filp)					\
 do {									\
@@ -417,6 +542,12 @@ do {									\
 #define ublk_td_count(ub, event)	do { } while (0)
 #define ublk_td_opener(ub, nth)		do { } while (0)
 #define ublk_td_closed(ub, filp)	do { } while (0)
+#define ublk_td_park(ubq, io, op)	do { } while (0)
+#define ublk_td_visit(ubq, io, how)	do { } while (0)
+#define ublk_td_evt(ubq, io, id_, info_) do { } while (0)
+#define ublk_td_evt_locked(ubq, io, id_, info_) do { } while (0)
+#define ublk_td_seq(ub, field)		do { } while (0)
+#define ublk_td_delay(ubq, field)	do { } while (0)
 #endif
 
 #ifdef CONFIG_FAULT_INJECTION_DEBUG_FS
@@ -521,6 +652,8 @@ static void ublk_batch_dispatch(struct ublk_queue *ubq,
 				struct ublk_batch_fetch_cmd *fcmd);
 static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 		unsigned int issue_flags);
+static void ublk_td_dump_evts(const struct ublk_device *ub, struct ublk_io *io,
+			      u16 tag);
 static void ublk_abort_dispatch_queue(struct ublk_queue *ubq);
 
 static inline bool ublk_dev_support_batch_io(const struct ublk_device *ub)
@@ -619,6 +752,7 @@ static void ublk_undo_dispatch(struct ublk_queue *ubq, struct ublk_io *io,
 	ublk_clear_dispatching(io);
 
 	ret = ublk_check_canceling(ubq, io);
+	ublk_td_evt(ubq, io, UBLK_TE_UNDO, ret == UBLK_IO_RES_ABORT);
 	if (ret == UBLK_IO_RES_ABORT) {
 		/* io->cmd set to NULL by ublk_check_canceling() */
 		io_uring_cmd_done(cmd, ret, issue_flags);
@@ -1447,7 +1581,11 @@ static inline bool ublk_get_req_ref(struct ublk_io *io)
 
 static inline void ublk_put_req_ref(struct ublk_io *io, struct request *req)
 {
-	if (!refcount_dec_and_test(&io->ref))
+	bool last = refcount_dec_and_test(&io->ref);
+
+	ublk_td_evt(req->mq_hctx->driver_data, io, UBLK_TE_REF_PUT,
+		    min_t(unsigned int, refcount_read(&io->ref), 255));
+	if (!last)
 		return;
 
 	/*
@@ -1897,8 +2035,11 @@ static struct io_uring_cmd *__ublk_prep_compl_io_cmd(
 
 	lockdep_assert_held(&io->lock);
 
-	if (unlikely(READ_ONCE(ubq->canceling)))
+	if (unlikely(READ_ONCE(ubq->canceling))) {
+		ublk_td_evt_locked(ubq, io, UBLK_TE_HANDOVER, false);
 		return NULL;
+	}
+	ublk_td_evt_locked(ubq, io, UBLK_TE_HANDOVER, true);
 
 	/* mark this cmd owned by ublksrv */
 	ublk_io_move(ubq, io, UBLK_IO_S_DISPATCHING, UBLK_IO_S_OWNED_BY_SRV);
@@ -1940,6 +2081,8 @@ static inline void __ublk_abort_rq(struct ublk_queue *ubq,
 	 * itself, and the queue_rq path never reached a dispatch.
 	 */
 	ublk_clear_dispatching(&ubq->ios[rq->tag]);
+	ublk_td_evt(ubq, &ubq->ios[rq->tag], UBLK_TE_ABORT_RQ,
+		    !!ubq->ios[rq->tag].cmd);
 
 	/* We cannot process this rq so just requeue it. */
 	if (ublk_nosrv_dev_should_queue_io(ubq->dev)) {
@@ -1996,6 +2139,8 @@ static bool ublk_auto_buf_io_setup(const struct ublk_queue *ubq,
 		io->task_registered_buffers = 1;
 		io->buf_ctx_handle = io_uring_cmd_ctx_handle(cmd);
 		io->flags |= UBLK_IO_FLAG_AUTO_BUF_REG;
+		ublk_td_evt_locked(ubq, io, UBLK_TE_AUTO_REG,
+				   io->task_registered_buffers);
 	}
 	ublk_init_req_ref(ubq, io);
 	return __ublk_prep_compl_io_cmd(ubq, io, req) != NULL;
@@ -2767,6 +2912,7 @@ static blk_status_t ublk_prep_req(struct ublk_queue *ubq, struct request *rq,
 		ublk_io_move(ubq, io, UBLK_IO_S_AVAILABLE, UBLK_IO_S_QUEUED);
 	io->flags |= UBLK_IO_FLAG_DISPATCHING;
 	blk_mq_start_request(rq);
+	ublk_td_evt_locked(ubq, io, UBLK_TE_PREP_DISPATCH, !!canceling);
 	ublk_io_unlock(io);
 	return BLK_STS_OK;
 }
@@ -2794,9 +2940,11 @@ static inline blk_status_t __ublk_queue_rq_common(struct ublk_queue *ubq,
 	delay_us = ublk_delay_us(ubq->dev, prep_cancel);
 	if (delay_us)
 		mdelay(delay_us / USEC_PER_MSEC);
+	ublk_td_delay(ubq, delay_prep_cancel_us);
 
 	if (unlikely(canceling)) {
 		*should_queue = false;
+		ublk_td_evt(ubq, &ubq->ios[rq->tag], UBLK_TE_QRQ_CANCELING, 0);
 		__ublk_abort_rq(ubq, rq);
 		return BLK_STS_OK;
 	}
@@ -3105,6 +3253,8 @@ static void ublk_set_canceling(struct ublk_device *ub, bool canceling)
 	u16 i;
 
 	ub->canceling = canceling;
+	if (canceling)
+		ublk_td_seq(ub, set_canceling_seq);
 	for (i = 0; i < ub->dev_info.nr_hw_queues; i++) {
 		struct ublk_queue *ubq = ublk_get_queue(ub, i);
 
@@ -3343,15 +3493,26 @@ static void __ublk_fail_req(struct ublk_device *ub, struct ublk_io *io,
 			ublk_io_lock(io);
 			io->flags &= ~UBLK_IO_FLAG_REQUEUE_REQ;
 			ublk_io_unlock(io);
+			ublk_td_evt(req->mq_hctx->driver_data, io,
+				    UBLK_TE_FAIL_REQ, 1);
 			/* teardown's own kick may already have run */
 			blk_mq_requeue_request(req, true);
+		} else {
+			ublk_td_evt(req->mq_hctx->driver_data, io,
+				    UBLK_TE_FAIL_REQ, 0);
 		}
 	} else {
 		io->res = -EIO;
 		/* the last reference drop (server or here) completes */
-		if (!has_dispatch_ref || ublk_need_complete_req(ub, io))
+		if (!has_dispatch_ref || ublk_need_complete_req(ub, io)) {
+			ublk_td_evt(req->mq_hctx->driver_data, io,
+				    UBLK_TE_FAIL_REQ, 1);
 			__ublk_complete_rq(req, io, ublk_dev_need_map_io(ub),
 					   NULL);
+		} else {
+			ublk_td_evt(req->mq_hctx->driver_data, io,
+				    UBLK_TE_FAIL_REQ, 0);
+		}
 	}
 }
 
@@ -3512,6 +3673,7 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	ublk_io_lock(io);
 	/* OWNED_BY_SRV holds no command */
 	if (!(io->flags & UBLK_IO_FLAG_ACTIVE)) {
+		ublk_td_visit(ubq, io, UBLK_TV_SKIP_OWNER);
 		ublk_io_unlock(io);
 		ublk_td_count(ub, cancel_skip_owner);
 		return;
@@ -3522,6 +3684,10 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	 * completes that itself.
 	 */
 	if (io->flags & UBLK_IO_FLAG_DISPATCHING) {
+		ublk_td_visit(ubq, io, UBLK_TV_SKIP_DISPATCH);
+		/* the walk comes here once, so a parked command left here stays */
+		if (io->cmd)
+			ublk_td_count(ub, cancel_skip_dispatch_parked);
 		ublk_io_unlock(io);
 		ublk_td_count(ub, cancel_skip_started);
 		return;
@@ -3538,6 +3704,7 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 		ublk_io_moved(io, UBLK_IO_S_INVALID);
 	}
 	spin_unlock(&ubq->cancel_lock);
+	ublk_td_visit(ubq, io, UBLK_TV_CANCELED);
 	ublk_io_unlock(io);
 
 	if (!done && cmd) {
@@ -3650,6 +3817,10 @@ static void ublk_uring_cmd_cancel_fn(struct io_uring_cmd *cmd,
 
 	ublk_start_cancel(ubq->dev);
 
+	ublk_td_evt(ubq, io, UBLK_TE_CANCEL_FN,
+		    !io->cmd ? 0 : (io->cmd == cmd ? 1 : 2));
+	if (io->cmd != cmd)
+		ublk_td_dump_evts(ubq->dev, io, pdu->tag);
 	/*
 	 * NULL: the command was taken but is not completed yet, and io_uring
 	 * drops it from the cancelable list only on completion. A different
@@ -3695,8 +3866,10 @@ static void ublk_cancel_dev(struct ublk_device *ub)
 	/* emulates the caller being preempted before the walk */
 	if (delay_us)
 		msleep(delay_us / USEC_PER_MSEC);
+	ublk_td_seq(ub, cancel_dev_start_seq);
 	for (i = 0; i < ub->dev_info.nr_hw_queues; i++)
 		ublk_cancel_queue(ublk_get_queue(ub, i));
+	ublk_td_seq(ub, cancel_dev_end_seq);
 }
 
 static bool ublk_check_inflight_rq(struct request *rq, void *data)
@@ -3727,6 +3900,48 @@ static void ublk_wait_tagset_rqs_idle(struct ublk_device *ub)
 
 #define UBLK_FREEZE_WARN_TIMEOUT_MS	5000
 
+#ifdef CONFIG_DEBUG_FS
+static const char *ublk_tag_evt_name(u8 id);
+static const char *ublk_park_op_name(u8 op);
+
+/* the recorded history of a tag del_gendisk() is about to wait on */
+static void ublk_td_dump_evts(const struct ublk_device *ub, struct ublk_io *io,
+			      u16 tag)
+{
+	struct ublk_tag_evt evts[UBLK_TAG_EVTS], last_park;
+	u8 head, idx;
+
+	ublk_io_lock(io);
+	head = io->evts_head;
+	last_park = io->last_park;
+	memcpy(evts, io->evts, sizeof(evts));
+	ublk_io_unlock(io);
+
+	if (last_park.id)
+		pr_warn("  tag %u park seq %u op %s canceling %u flags %x\n",
+			tag, last_park.seq, ublk_park_op_name(last_park.info),
+			last_park.canceling, last_park.io_flags);
+
+	for (idx = 0; idx < UBLK_TAG_EVTS; idx++) {
+		const struct ublk_tag_evt *evt =
+			&evts[(head + idx) % UBLK_TAG_EVTS];
+
+		if (!evt->id)
+			continue;
+		pr_warn("  tag %u evt seq %u %s info %u canceling %u flags %x\n",
+			tag, evt->seq, ublk_tag_evt_name(evt->id), evt->info,
+			evt->canceling, evt->io_flags);
+	}
+	pr_warn("  dev %d set_canceling_seq %u cancel_dev %u..%u\n",
+		ub->dev_info.dev_id, ub->teardown.set_canceling_seq,
+		ub->teardown.cancel_dev_start_seq,
+		ub->teardown.cancel_dev_end_seq);
+}
+#else
+static void ublk_td_dump_evts(const struct ublk_device *ub,
+			      struct ublk_io *io, u16 tag) { }
+#endif
+
 static bool ublk_warn_started_rq(struct request *rq, void *data)
 {
 	struct ublk_device *ub = data;
@@ -3738,6 +3953,7 @@ static bool ublk_warn_started_rq(struct request *rq, void *data)
 			io->flags, refcount_read(&io->ref),
 			io->task_registered_buffers,
 			io->task ? task_pid_nr(io->task) : -1);
+	ublk_td_dump_evts(ub, io, rq->tag);
 	return true;
 }
 
@@ -4035,6 +4251,7 @@ static int ublk_check_canceling(struct ublk_queue *ubq, struct ublk_io *io)
 		ublk_io_moved(io, UBLK_IO_S_INVALID);
 	}
 	spin_unlock(&ubq->cancel_lock);
+	ublk_td_evt_locked(ubq, io, UBLK_TE_TAKE_CMD, !canceled);
 	ublk_io_unlock(io);
 
 	/* ublk_cancel_cmd() got here first and already completed the cmd */
@@ -4342,6 +4559,7 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 		if (ret)
 			goto out;
 
+		ublk_td_park(ubq, io, _IOC_NR(cmd_op));
 		ublk_prep_cancel(cmd, issue_flags, ubq, tag);
 		return -EIOCBQUEUED;
 	}
@@ -4402,6 +4620,8 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 		io->res = result;
 		req = ublk_fill_io_cmd(io, cmd);
 		ublk_io_unlock(io);
+		/* command parked, request still started: the walk cancels it */
+		ublk_td_delay(ubq, delay_park_check_us);
 		ublk_apply_io_buf(ub, io, cmd, addr, &auto_buf, &buf_idx);
 		if (buf_idx != UBLK_INVALID_BUF_IDX)
 			io_buffer_unregister(cmd, buf_idx, issue_flags);
@@ -4454,6 +4674,7 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 	if (unlikely(ret))
 		return ret;
 
+	ublk_td_park(ubq, io, _IOC_NR(cmd_op));
 	ublk_prep_cancel(cmd, issue_flags, ubq, tag);
 	return -EIOCBQUEUED;
 
@@ -5395,6 +5616,94 @@ static int ublk_debugfs_dev_state_show(struct seq_file *sf, void *priv)
 }
 DEFINE_SHOW_ATTRIBUTE(ublk_debugfs_dev_state);
 
+/* the command op that parked ->cmd, so a stranded tag names its own path */
+static const char *ublk_park_op_name(u8 op)
+{
+	switch (op) {
+	case UBLK_IO_FETCH_REQ:
+		return "FETCH_REQ";
+	case UBLK_IO_COMMIT_AND_FETCH_REQ:
+		return "COMMIT_AND_FETCH_REQ";
+	case UBLK_IO_NEED_GET_DATA:
+		return "NEED_GET_DATA";
+	default:
+		return "?";
+	}
+}
+
+static const char *ublk_tag_visit_name(u8 visit)
+{
+	static const char * const name[] = {
+		[UBLK_TV_NONE]		= "NONE",
+		[UBLK_TV_SKIP_OWNER]	= "SKIP_OWNER",
+		[UBLK_TV_SKIP_DISPATCH]	= "SKIP_DISPATCH",
+		[UBLK_TV_CANCELED]	= "CANCELED",
+	};
+
+	return visit < ARRAY_SIZE(name) ? name[visit] : "?";
+}
+
+static const char *ublk_tag_evt_name(u8 id)
+{
+	static const char * const name[] = {
+		[UBLK_TE_NONE]		= "NONE",
+		[UBLK_TE_PARK]		= "PARK",
+		[UBLK_TE_PREP_DISPATCH]	= "PREP_DISPATCH",
+		[UBLK_TE_QRQ_CANCELING]	= "QRQ_CANCELING",
+		[UBLK_TE_ABORT_RQ]	= "ABORT_RQ",
+		[UBLK_TE_HANDOVER]	= "HANDOVER",
+		[UBLK_TE_UNDO]		= "UNDO",
+		[UBLK_TE_VISIT]		= "VISIT",
+		[UBLK_TE_AUTO_REG]	= "AUTO_REG",
+		[UBLK_TE_FAIL_REQ]	= "FAIL_REQ",
+		[UBLK_TE_REF_PUT]	= "REF_PUT",
+		[UBLK_TE_TAKE_CMD]	= "TAKE_CMD",
+		[UBLK_TE_CANCEL_FN]	= "CANCEL_FN",
+	};
+
+	return id < ARRAY_SIZE(name) ? name[id] : "?";
+}
+
+/* ->info means something different per event, so name it per event */
+static void ublk_debugfs_put_tag_evt(struct seq_file *sf,
+				     const struct ublk_tag_evt *evt)
+{
+	if (!evt->id)
+		return;
+
+	seq_printf(sf, UBLK_DEBUGFS_TAG_INDENT "%u %s", evt->seq,
+		   ublk_tag_evt_name(evt->id));
+
+	switch (evt->id) {
+	case UBLK_TE_PARK:
+		seq_printf(sf, " %s", ublk_park_op_name(evt->info));
+		break;
+	case UBLK_TE_VISIT:
+		seq_printf(sf, " %s", ublk_tag_visit_name(evt->info));
+		break;
+	case UBLK_TE_PREP_DISPATCH:
+		if (evt->info)
+			seq_puts(sf, " QUEUE_RQ");
+		break;
+	case UBLK_TE_ABORT_RQ:
+		if (evt->info)
+			seq_puts(sf, " CMD_PARKED");
+		break;
+	case UBLK_TE_HANDOVER:
+		if (evt->info)
+			seq_puts(sf, " GRANTED");
+		break;
+	case UBLK_TE_UNDO:
+		if (evt->info)
+			seq_puts(sf, " ABORTED");
+		break;
+	}
+
+	if (evt->canceling)
+		seq_puts(sf, " CANCELING");
+	seq_puts(sf, "\n");
+}
+
 static int ublk_debugfs_tags_show(struct seq_file *sf, void *priv)
 {
 	struct ublk_device *ub = sf->private;
@@ -5411,20 +5720,28 @@ static int ublk_debugfs_tags_show(struct seq_file *sf, void *priv)
 
 		for (tag = 0; tag < ubq->q_depth; tag++) {
 			struct ublk_io *io = &ubq->ios[tag];
+			struct ublk_tag_evt evts[UBLK_TAG_EVTS], last_park;
 			struct io_uring_cmd *cmd;
 			struct request *req, *srv_req;
 			unsigned int flags, registered;
+			u8 state, park_op, visit, head, evt_idx;
 			int refs, pid;
-			bool started;
+			bool started, park_in_ring;
 
 			/* seq_printf() may sleep, so copy and print after */
 			ublk_io_lock(io);
+			state = io->state;
 			flags = io->flags;
 			cmd = io->cmd;
 			srv_req = io->req;
 			refs = refcount_read(&io->ref);
 			registered = io->task_registered_buffers;
 			pid = io->task ? task_pid_nr(io->task) : -1;
+			park_op = io->park_op;
+			visit = io->cancel_visit;
+			head = io->evts_head;
+			last_park = io->last_park;
+			memcpy(evts, io->evts, sizeof(evts));
 			ublk_io_unlock(io);
 
 			req = tags ? blk_mq_tag_to_rq(tags, tag) : NULL;
@@ -5435,11 +5752,14 @@ static int ublk_debugfs_tags_show(struct seq_file *sf, void *priv)
 			if (!flags && !started)
 				continue;
 
-			seq_printf(sf, "  tag %u", tag);
+			seq_printf(sf, "  tag %u  %s", tag,
+				   ublk_io_state_name(state));
 			if (started)
 				seq_puts(sf, "  REQ_STARTED");
 			if (cmd && (flags & UBLK_IO_FLAG_ACTIVE))
 				seq_puts(sf, "  CMD_PARKED");
+			if (park_op)
+				seq_printf(sf, "  %s", ublk_park_op_name(park_op));
 			if (pid >= 0)
 				seq_printf(sf, "  pid %d", pid);
 			seq_printf(sf, "  ref %d  reg_bufs %u", refs, registered);
@@ -5454,6 +5774,28 @@ static int ublk_debugfs_tags_show(struct seq_file *sf, void *priv)
 				ublk_debugfs_put_io_flags(sf, flags);
 				seq_printf(sf, "(0x%08x)\n", flags);
 			}
+			if (visit)
+				seq_printf(sf, UBLK_DEBUGFS_TAG_INDENT "walk %s\n",
+					   ublk_tag_visit_name(visit));
+
+			/*
+			 * Stranded either way: a parked command nobody took,
+			 * or a request nobody completed. The second shape is
+			 * how a tag handed over after the cancel pass shows up.
+			 */
+			if (!started && (!cmd || !(flags & UBLK_IO_FLAG_ACTIVE)))
+				continue;
+
+			/* print last_park apart only once the ring aged it out */
+			park_in_ring = false;
+			for (evt_idx = 0; evt_idx < UBLK_TAG_EVTS; evt_idx++)
+				if (evts[evt_idx].seq == last_park.seq)
+					park_in_ring = true;
+			if (!park_in_ring)
+				ublk_debugfs_put_tag_evt(sf, &last_park);
+			for (evt_idx = 0; evt_idx < UBLK_TAG_EVTS; evt_idx++)
+				ublk_debugfs_put_tag_evt(sf,
+					&evts[(head + evt_idx) % UBLK_TAG_EVTS]);
 		}
 	}
 	return 0;
@@ -5516,6 +5858,14 @@ static int ublk_debugfs_teardown_show(struct seq_file *sf, void *priv)
 		   atomic_read(&td->cancel_skip_owner));
 	seq_printf(sf, "cancel_skip_started: %d\n",
 		   atomic_read(&td->cancel_skip_started));
+	/* a skip that left a command parked should never happen */
+	seq_printf(sf, "cancel_skip_dispatch_parked: %d\n",
+		   atomic_read(&td->cancel_skip_dispatch_parked));
+	/* orders a tag's history against cancellation */
+	seq_printf(sf, "seq: %d\n", atomic_read(&td->seq));
+	seq_printf(sf, "set_canceling_seq: %u\n", td->set_canceling_seq);
+	seq_printf(sf, "cancel_dev_seq: %u..%u\n", td->cancel_dev_start_seq,
+		   td->cancel_dev_end_seq);
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(ublk_debugfs_teardown);
@@ -5562,6 +5912,10 @@ static void ublk_debugfs_dev_files(struct ublk_device *ub)
 	debugfs_create_file("teardown", 0444, ub->debugfs_dir, ub,
 			    &ublk_debugfs_teardown_fops);
 	ublk_debugfs_delay_points(ub);
+	debugfs_create_u32("delay_prep_cancel_us", 0644, ub->debugfs_dir,
+			   &ub->teardown.delay_prep_cancel_us);
+	debugfs_create_u32("delay_park_check_us", 0644, ub->debugfs_dir,
+			   &ub->teardown.delay_park_check_us);
 }
 
 static void ublk_debugfs_dev_init(struct ublk_device *ub)
