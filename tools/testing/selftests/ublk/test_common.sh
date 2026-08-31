@@ -639,6 +639,20 @@ _ublk_wait_pid_gone() {
 	return 1
 }
 
+# Usage: _ublk_wait_dev_state <dev_id> <state> <deadline>
+_ublk_wait_dev_state() {
+	local secs=0
+
+	while [ "$secs" -lt "$3" ]; do
+		if [ "$(_get_ublk_dev_state "$1")" = "$2" ]; then
+			return 0
+		fi
+		sleep 1
+		secs=$((secs + 1))
+	done
+	return 1
+}
+
 # a read: closing a device opened for writing makes udev probe it again
 _ublk_read_one_block() {
 	dd if=/dev/ublkb"$1" of=/dev/null iflag=direct bs=4k count=1
@@ -666,6 +680,26 @@ _ublk_wait_kmsg() {
 
 _ublk_stop_dev() {
 	"${UBLK_PROG}" stop -n "$1"
+}
+
+# inflight counts started requests only, so 1 means the read is started
+# Usage: _ublk_wait_reads_inflight <dev_id> <reads> <deadline>
+_ublk_wait_reads_inflight() {
+	local dev_id=$1
+	local want=$2
+	local reads
+	local writes
+	local secs=0
+
+	while [ "$secs" -lt "$3" ]; do
+		read -r reads writes < /sys/block/ublkb"${dev_id}"/inflight
+		if [ "$reads" -eq "$want" ] && [ "$writes" -eq 0 ]; then
+			return 0
+		fi
+		sleep 1
+		secs=$((secs + 1))
+	done
+	return 1
 }
 
 UBLK_PROG=$(_ublk_test_top_dir)/kublk
