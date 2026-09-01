@@ -11,7 +11,8 @@
 #include "kublk.h"
 
 struct fi_opts {
-	long long delay_ns;
+	/* io_uring reads this at submit, so it cannot live on the caller's stack */
+	struct __kernel_timespec delay_ts;
 	bool die_during_fetch;
 };
 
@@ -47,7 +48,8 @@ static int ublk_fault_inject_tgt_init(const struct dev_ctx *ctx,
 		return -ENOMEM;
 	}
 
-	opts->delay_ns = ctx->fault_inject.delay_us * 1000;
+	opts->delay_ts.tv_sec = ctx->fault_inject.delay_us / 1000000;
+	opts->delay_ts.tv_nsec = (ctx->fault_inject.delay_us % 1000000) * 1000;
 	opts->die_during_fetch = ctx->fault_inject.die_during_fetch;
 	dev->private_data = opts;
 
@@ -85,12 +87,9 @@ static int ublk_fault_inject_queue_io(struct ublk_thread *t,
 	const struct ublksrv_io_desc *iod = ublk_get_iod(q, tag);
 	struct io_uring_sqe *sqe;
 	struct fi_opts *opts = q->dev->private_data;
-	struct __kernel_timespec ts = {
-		.tv_nsec = opts->delay_ns,
-	};
 
 	ublk_io_alloc_sqes(t, &sqe, 1);
-	io_uring_prep_timeout(sqe, &ts, 1, 0);
+	io_uring_prep_timeout(sqe, &opts->delay_ts, 1, 0);
 	sqe->user_data = build_user_data(tag, ublksrv_get_op(iod), 0, q->q_id, 1);
 
 	ublk_queued_tgt_io(t, q, tag, 1);
