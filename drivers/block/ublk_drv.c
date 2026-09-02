@@ -5160,6 +5160,14 @@ static int ublk_ctrl_get_features(const struct ublksrv_ctrl_cmd *header)
 	void __user *argp = (void __user *)(unsigned long)header->addr;
 	u64 features = UBLK_F_ALL;
 
+	/*
+	 * UBLK_F_ALL is also the mask ublk_ctrl_add_dev() negotiates with, and
+	 * it refuses a zoned device rather than dropping the flag, so clear the
+	 * flag here instead of leaving it out of the mask.
+	 */
+	if (!IS_ENABLED(CONFIG_BLK_DEV_ZONED))
+		features &= ~UBLK_F_ZONED;
+
 	if (header->len != UBLK_FEATURES_LEN || !header->addr)
 		return -EINVAL;
 
