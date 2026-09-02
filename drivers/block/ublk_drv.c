@@ -4107,6 +4107,18 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 
 	/* there is pending io cmd, something must be wrong */
 	if (!(io->flags & UBLK_IO_FLAG_OWNED_BY_SRV)) {
+		/*
+		 * Teardown took the tag while an auto registered buffer was
+		 * still on it. Only this context can unregister that buffer,
+		 * and __ublk_fail_req() left the request on its reference, so
+		 * release it here or del_gendisk() waits for a reference
+		 * nothing else can drop.
+		 */
+		ublk_io_lock(io);
+		ublk_clear_auto_buf_reg(io, cmd, &buf_idx);
+		ublk_io_unlock(io);
+		if (buf_idx != UBLK_INVALID_BUF_IDX)
+			io_buffer_unregister(cmd, buf_idx, issue_flags);
 		ret = -EBUSY;
 		goto out;
 	}
