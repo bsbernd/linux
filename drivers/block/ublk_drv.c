@@ -200,6 +200,25 @@ struct ublk_batch_io_data {
 #define UBLK_IO_FLAG_CANCELED	0x80000000
 
 /*
+ * Who owns a tag, recorded beside the flags that decide it so a transition
+ * from an unintended state is reported where it happens rather than where it
+ * later goes wrong. The flags remain authoritative; nothing reads ->state.
+ *
+ * ->cmd is per tag only without UBLK_F_BATCH_IO. A batch queue dispatches
+ * through its own fetch command, so PARKED and DISPATCHING say who owns the
+ * tag there, not which pointer is set.
+ */
+enum ublk_io_state {
+	/* never fetched, taken by cancellation, or reset by recovery */
+	UBLK_IO_S_INVALID = 0,
+	UBLK_IO_S_AVAILABLE,	/* fetch command waiting for a request */
+	UBLK_IO_S_TW_PENDING,	/* command handed to task work, back on return */
+	UBLK_IO_S_QUEUED,	/* on ubq->evts_fifo, waiting for a batch fetch */
+	UBLK_IO_S_DISPATCHING,	/* a request assigned, handover in flight */
+	UBLK_IO_S_OWNED_BY_SRV,	/* the server holds the tag */
+};
+
+/*
  * Initialize refcount to a large number to include any registered buffers.
  * UBLK_IO_COMMIT_AND_FETCH_REQ will release these references minus those for
  * any buffers registered on the io daemon task.
@@ -243,6 +262,9 @@ struct ublk_io {
 
 	void *buf_ctx_handle;
 	spinlock_t lock;
+
+	/* enum ublk_io_state, verification only, changed under ->lock */
+	u8 state;
 } ____cacheline_aligned_in_smp;
 
 struct ublk_queue {
@@ -489,10 +511,61 @@ static inline void ublk_io_unlock(struct ublk_io *io)
 	spin_unlock(&io->lock);
 }
 
+static const char *ublk_io_state_name(u8 state)
+{
+	static const char * const name[] = {
+		[UBLK_IO_S_INVALID]	 = "INVALID",
+		[UBLK_IO_S_AVAILABLE]	 = "AVAILABLE",
+		[UBLK_IO_S_TW_PENDING]	 = "TW_PENDING",
+		[UBLK_IO_S_QUEUED]	 = "QUEUED",
+		[UBLK_IO_S_DISPATCHING]	 = "DISPATCHING",
+		[UBLK_IO_S_OWNED_BY_SRV] = "OWNED_BY_SRV",
+	};
+
+	return state < ARRAY_SIZE(name) ? name[state] : "?";
+}
+
+/*
+ * @from is what the caller believes the tag is in. Only for callers that own
+ * the tag, so being wrong is a driver bug. Every violation is reported with
+ * the tag it happened on; the trace names the transition only once.
+ */
+static void ublk_io_move(const struct ublk_queue *ubq, struct ublk_io *io,
+			 enum ublk_io_state from, enum ublk_io_state to)
+{
+	lockdep_assert_held(&io->lock);
+
+	if (unlikely(io->state != from)) {
+		pr_warn_ratelimited("ublk%d q%u tag %u: %s -> %s, but tag is %s (flags %x, cmd %p, req %p)\n",
+				    ubq->dev->dev_info.dev_id, ubq->q_id,
+				    (unsigned int)(io - ubq->ios),
+				    ublk_io_state_name(from),
+				    ublk_io_state_name(to),
+				    ublk_io_state_name(io->state),
+				    io->flags, io->cmd, io->req);
+		WARN_ON_ONCE(1);
+	}
+	io->state = to;
+}
+
+/* For callers racing another taker, where losing the race is normal */
+static void ublk_io_moved(struct ublk_io *io, enum ublk_io_state to)
+{
+	lockdep_assert_held(&io->lock);
+
+	io->state = to;
+}
+
 /* Hand the tag back: the command stays parked, so ACTIVE is untouched. */
 static void ublk_clear_dispatching(struct ublk_io *io)
 {
 	ublk_io_lock(io);
+	/*
+	 * Callers reach this both from a dispatch and from a request that was
+	 * never marked, so only the former is a state change.
+	 */
+	if (io->flags & UBLK_IO_FLAG_DISPATCHING)
+		ublk_io_moved(io, UBLK_IO_S_AVAILABLE);
 	io->flags &= ~UBLK_IO_FLAG_DISPATCHING;
 	ublk_io_unlock(io);
 }
@@ -1796,6 +1869,7 @@ static struct io_uring_cmd *__ublk_prep_compl_io_cmd(
 		return NULL;
 
 	/* mark this cmd owned by ublksrv */
+	ublk_io_move(ubq, io, UBLK_IO_S_DISPATCHING, UBLK_IO_S_OWNED_BY_SRV);
 	io->flags |= UBLK_IO_FLAG_OWNED_BY_SRV;
 
 	/* The server owns the tag once neither local state remains. */
@@ -2200,6 +2274,8 @@ static noinline void ublk_batch_dispatch_fail(struct ublk_queue *ubq,
 				io->task_registered_buffers = 0;
 		}
 		if (io->flags & UBLK_IO_FLAG_OWNED_BY_SRV) {
+			ublk_io_move(ubq, io, UBLK_IO_S_OWNED_BY_SRV,
+				     UBLK_IO_S_DISPATCHING);
 			io->flags &= ~UBLK_IO_FLAG_OWNED_BY_SRV;
 			io->flags |= UBLK_IO_FLAG_ACTIVE | UBLK_IO_FLAG_DISPATCHING;
 			reclaimed = true;
@@ -2472,6 +2548,7 @@ static void ublk_cmd_tw_cb(struct io_tw_req tw_req, io_tw_token_t tw)
 	 * its own request in the list, and the handover needs ->cmd.
 	 */
 	ublk_io_lock(io);
+	ublk_io_move(ubq, io, UBLK_IO_S_TW_PENDING, UBLK_IO_S_DISPATCHING);
 	io->cmd = cmd;
 	io->flags |= UBLK_IO_FLAG_ACTIVE;
 	io->flags &= ~UBLK_IO_FLAG_CMD_TW_PENDING;
@@ -2512,6 +2589,7 @@ static void ublk_queue_cmd_list(struct ublk_queue *ubq, struct ublk_io *io,
 	ublk_io_lock(io);
 	cmd = (io->flags & UBLK_IO_FLAG_ACTIVE) ? io->cmd : NULL;
 	if (cmd) {
+		ublk_io_move(ubq, io, UBLK_IO_S_DISPATCHING, UBLK_IO_S_TW_PENDING);
 		io->cmd = NULL;
 		io->flags &= ~UBLK_IO_FLAG_ACTIVE;
 		io->flags |= UBLK_IO_FLAG_CMD_TW_PENDING;
@@ -2608,6 +2686,10 @@ static blk_status_t ublk_prep_req(struct ublk_queue *ubq, struct request *rq,
 		return BLK_STS_IOERR;
 
 	ublk_io_lock(io);
+	if (ublk_support_batch_io(ubq))
+		ublk_io_moved(io, UBLK_IO_S_DISPATCHING);
+	else
+		ublk_io_move(ubq, io, UBLK_IO_S_AVAILABLE, UBLK_IO_S_DISPATCHING);
 	io->flags |= UBLK_IO_FLAG_DISPATCHING;
 	blk_mq_start_request(rq);
 	ublk_io_unlock(io);
@@ -2831,6 +2913,8 @@ static void ublk_queue_reinit(struct ublk_device *ub, struct ublk_queue *ubq)
 		 * io->cmd
 		 */
 		io->flags &= UBLK_IO_FLAG_CANCELED;
+		/* recovery resets whatever the tag was doing */
+		ublk_io_moved(io, UBLK_IO_S_INVALID);
 		io->cmd = NULL;
 		io->buf.addr = 0;
 
@@ -3257,8 +3341,10 @@ static bool ublk_abort_started_rq(struct request *rq, void *data)
 
 	ublk_io_lock(io);
 	owned = io->flags & UBLK_IO_FLAG_OWNED_BY_SRV;
-	if (owned)
+	if (owned) {
+		ublk_io_move(ubq, io, UBLK_IO_S_OWNED_BY_SRV, UBLK_IO_S_INVALID);
 		io->flags &= ~UBLK_IO_FLAG_OWNED_BY_SRV;
+	}
 	ublk_io_unlock(io);
 
 	/* OWNED_BY_SRV, so the dispatch reference is held */
@@ -3370,6 +3456,8 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 		io->flags &= ~UBLK_IO_FLAG_ACTIVE;
 		cmd = io->cmd;
 		io->cmd = NULL;
+		/* races ublk_check_canceling() for the same command */
+		ublk_io_moved(io, UBLK_IO_S_INVALID);
 	}
 	spin_unlock(&ubq->cancel_lock);
 	ublk_io_unlock(io);
@@ -3787,6 +3875,11 @@ ublk_fill_io_cmd(struct ublk_io *io, struct io_uring_cmd *cmd)
 {
 	struct request *req = io->req;
 
+	/*
+	 * Reached from the first fetch as well as from a commit, so the tag
+	 * comes from either end.
+	 */
+	ublk_io_moved(io, UBLK_IO_S_AVAILABLE);
 	io->req = NULL;
 	io->cmd = cmd;
 	io->flags |= UBLK_IO_FLAG_ACTIVE;
@@ -3819,6 +3912,8 @@ static int ublk_check_canceling(struct ublk_queue *ubq, struct ublk_io *io)
 		/* ACTIVE means a parked command, and this takes it */
 		io->flags &= ~UBLK_IO_FLAG_ACTIVE;
 		io->cmd = NULL;
+		/* races ublk_cancel_cmd() for the same command */
+		ublk_io_moved(io, UBLK_IO_S_INVALID);
 	}
 	spin_unlock(&ubq->cancel_lock);
 	ublk_io_unlock(io);
@@ -4177,6 +4272,7 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 			goto out;
 		}
 		req = ublk_fill_io_cmd(io, cmd);
+		ublk_io_move(ubq, io, UBLK_IO_S_AVAILABLE, UBLK_IO_S_DISPATCHING);
 		io->flags |= UBLK_IO_FLAG_DISPATCHING;
 		ublk_io_unlock(io);
 		io->buf.addr = addr;
