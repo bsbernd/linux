@@ -3091,7 +3091,13 @@ static void ublk_uring_cmd_cancel_fn(struct io_uring_cmd *cmd,
 
 	ublk_start_cancel(ubq->dev);
 
-	WARN_ON_ONCE(io->cmd != cmd);
+	/*
+	 * NULL means ublk_check_canceling() took the command already. The
+	 * driver cannot drop it from the cancelable list before completing it,
+	 * so io_uring still reaches this tag. A different command would mean
+	 * the tag was re-parked while this one was still cancelable.
+	 */
+	WARN_ON_ONCE(io->cmd && io->cmd != cmd);
 	ublk_cancel_cmd(ubq, pdu->tag, issue_flags);
 }
 
@@ -3371,6 +3377,8 @@ static int ublk_check_canceling(struct ublk_queue *ubq, struct ublk_io *io)
 	canceled = !!(io->flags & UBLK_IO_FLAG_CANCELED);
 	if (!canceled) {
 		io->flags |= UBLK_IO_FLAG_CANCELED;
+		/* ACTIVE means a parked command, and this takes it */
+		io->flags &= ~UBLK_IO_FLAG_ACTIVE;
 		io->cmd = NULL;
 	}
 	spin_unlock(&ubq->cancel_lock);
