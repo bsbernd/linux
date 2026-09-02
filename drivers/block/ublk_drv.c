@@ -646,6 +646,37 @@ static inline void ublk_io_unlock(struct ublk_io *io)
 	spin_unlock(&io->lock);
 }
 
+/*
+ * UBLK_IO_FLAG_ACTIVE says a command is parked on the tag, and
+ * UBLK_IO_FLAG_OWNED_BY_SRV says the server has it instead. Both are stated
+ * as invariants where they are defined and neither was ever checked, so a tag
+ * carrying ACTIVE with no command reached ublk_belong_to_same_batch(), which
+ * hands ->cmd to io_uring_cmd_ctx_handle() on the strength of that flag.
+ *
+ * UBLK_F_BATCH_IO dispatches through the queue's fetch command, so its tags
+ * are ACTIVE without one and are not covered.
+ */
+static void ublk_io_check_cmd_flags(const struct ublk_queue *ubq,
+				    const struct ublk_io *io)
+{
+	bool active = io->flags & UBLK_IO_FLAG_ACTIVE;
+	bool owned = io->flags & UBLK_IO_FLAG_OWNED_BY_SRV;
+
+	lockdep_assert_held(&io->lock);
+
+	if (ublk_support_batch_io(ubq))
+		return;
+
+	if (likely(active == !!io->cmd && !(owned && (active || io->cmd))))
+		return;
+
+	pr_warn_ratelimited("ublk%d q%u tag %u: flags %x with cmd %p (ACTIVE %d, OWNED_BY_SRV %d)\n",
+			    ubq->dev->dev_info.dev_id, ubq->q_id,
+			    (unsigned int)(io - ubq->ios), io->flags, io->cmd,
+			    active, owned);
+	WARN_ON_ONCE(1);
+}
+
 static const char *ublk_io_state_name(u8 state)
 {
 	static const char * const name[] = {
@@ -2020,6 +2051,7 @@ static struct io_uring_cmd *__ublk_prep_compl_io_cmd(
 
 	io->cmd = NULL;
 	io->req = req;
+	ublk_io_check_cmd_flags(ubq, io);
 	return cmd;
 }
 
@@ -2699,6 +2731,7 @@ static void ublk_cmd_tw_cb(struct io_tw_req tw_req, io_tw_token_t tw)
 	io->cmd = cmd;
 	io->flags |= UBLK_IO_FLAG_ACTIVE;
 	io->flags &= ~UBLK_IO_FLAG_CMD_TW_PENDING;
+	ublk_io_check_cmd_flags(ubq, io);
 	ublk_io_unlock(io);
 
 	ublk_take_dispatch_list(ubq, &list, false);
@@ -2741,6 +2774,7 @@ static void ublk_queue_cmd_list(struct ublk_queue *ubq, struct ublk_io *io,
 		io->flags &= ~UBLK_IO_FLAG_ACTIVE;
 		io->flags |= UBLK_IO_FLAG_CMD_TW_PENDING;
 	}
+	ublk_io_check_cmd_flags(ubq, io);
 	ublk_io_unlock(io);
 
 	spin_lock(&ubq->disp_lock);
@@ -3631,6 +3665,7 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 		/* races ublk_check_canceling() for the same command */
 		ublk_io_moved(io, UBLK_IO_S_INVALID);
 	}
+	ublk_io_check_cmd_flags(ubq, io);
 	spin_unlock(&ubq->cancel_lock);
 	ublk_td_visit(ubq, io, UBLK_TV_CANCELED);
 	ublk_io_unlock(io);
@@ -4137,6 +4172,7 @@ static int ublk_check_canceling(struct ublk_queue *ubq, struct ublk_io *io)
 		/* races ublk_cancel_cmd() for the same command */
 		ublk_io_moved(io, UBLK_IO_S_INVALID);
 	}
+	ublk_io_check_cmd_flags(ubq, io);
 	spin_unlock(&ubq->cancel_lock);
 	ublk_td_evt_locked(ubq, io, UBLK_TE_TAKE_CMD, !canceled);
 	ublk_io_unlock(io);
