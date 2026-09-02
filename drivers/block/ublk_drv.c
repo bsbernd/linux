@@ -459,6 +459,13 @@ struct ublk_teardown_record {
 	 */
 	u32		delay_prep_cancel_us;
 	u32		delay_park_check_us;
+
+	/*
+	 * Reach the readiness wait this late, in microseconds, with the pending
+	 * signal dropped: the io-wq worker arriving after get_signal() already
+	 * took SIGKILL. 0 = off.
+	 */
+	u32		debug_late_ready_wait_us;
 };
 
 #ifdef CONFIG_DEBUG_FS
@@ -5714,6 +5721,8 @@ static void ublk_debugfs_dev_files(struct ublk_device *ub)
 			   &ub->teardown.delay_prep_cancel_us);
 	debugfs_create_u32("delay_park_check_us", 0644, ub->debugfs_dir,
 			   &ub->teardown.delay_park_check_us);
+	debugfs_create_u32("debug_late_ready_wait_us", 0644, ub->debugfs_dir,
+			   &ub->teardown.debug_late_ready_wait_us);
 }
 
 static void ublk_debugfs_dev_init(struct ublk_device *ub)
@@ -5922,6 +5931,30 @@ static bool ublk_validate_user_pid(struct ublk_device *ub, pid_t ublksrv_pid)
  */
 static int ublk_wait_dev_ready_and_lock(struct ublk_device *ub)
 {
+	u32 late_us = READ_ONCE(ub->teardown.debug_late_ready_wait_us);
+
+	if (unlikely(late_us))
+		pr_info("ublk%d: ready wait entered by %s/%d, ready %d, group_exit %d, sigpending %d\n",
+			ub->dev_info.dev_id, current->comm, current->pid,
+			ublk_dev_ready(ub),
+			!!(current->signal->flags & SIGNAL_GROUP_EXIT),
+			signal_pending(current));
+
+	/*
+	 * Arrive after the kill with nothing pending: get_signal() takes
+	 * SIGKILL, and io-wq's own TIF_NOTIFY_SIGNAL is consumed by the time
+	 * the worker drains its queue. signal_pending() covers both.
+	 */
+	if (unlikely(late_us)) {
+		msleep(late_us / USEC_PER_MSEC);
+		flush_signals(current);
+		clear_notify_signal();
+		pr_info("ublk%d: late entry done, group_exit %d, sigpending %d\n",
+			ub->dev_info.dev_id,
+			!!(current->signal->flags & SIGNAL_GROUP_EXIT),
+			signal_pending(current));
+	}
+
 	while (true) {
 		if (wait_var_event_interruptible(&ub->nr_queue_ready,
 						 ublk_dev_ready(ub)))
