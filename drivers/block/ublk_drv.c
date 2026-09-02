@@ -34,6 +34,7 @@
 #include <linux/uio.h>
 #include <linux/ioprio.h>
 #include <linux/sched/mm.h>
+#include <linux/sched/signal.h>
 #include <linux/uaccess.h>
 #include <linux/cdev.h>
 #include <linux/io_uring/cmd.h>
@@ -5924,6 +5925,19 @@ static bool ublk_validate_user_pid(struct ublk_device *ub, pid_t ublksrv_pid)
 }
 
 /*
+ * Only the server can FETCH, so once its thread group is exiting readiness
+ * can never arrive. Checked instead of the pending signal: this command runs
+ * from an io-wq worker of that group, and get_signal() dequeues SIGKILL for a
+ * PF_USER_WORKER without ending it, leaving a worker that drains the rest of
+ * the queue with nothing pending.
+ */
+static bool ublk_srv_group_exiting(void)
+{
+	return (READ_ONCE(current->signal->flags) & SIGNAL_GROUP_EXIT) ||
+	       fatal_signal_pending(current);
+}
+
+/*
  * Wait until all queues have fetched their I/O commands, and return with
  * ub->mutex held and readiness guaranteed: then every queue's ->canceling
  * is cleared. Ready may regress between wakeup and mutex_lock() (F_BATCH
@@ -5957,13 +5971,17 @@ static int ublk_wait_dev_ready_and_lock(struct ublk_device *ub)
 
 	while (true) {
 		if (wait_var_event_interruptible(&ub->nr_queue_ready,
-						 ublk_dev_ready(ub)))
+						 ublk_dev_ready(ub) ||
+						 ublk_srv_group_exiting()))
 			return -EINTR;
 
 		mutex_lock(&ub->mutex);
 		if (ublk_dev_ready(ub))
 			return 0;
 		mutex_unlock(&ub->mutex);
+
+		if (ublk_srv_group_exiting())
+			return -EINTR;
 	}
 }
 
