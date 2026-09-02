@@ -61,6 +61,7 @@ struct fault_inject_ctx {
 	/* fault_inject */
 	unsigned long   delay_us;
 	bool die_during_fetch;
+	unsigned long   die_during_fetch_delay_us;
 };
 
 struct params_ctx {
