@@ -95,6 +95,7 @@ TEST_PROGS += test_teardown_self_del.sh
 TEST_PROGS += test_teardown_union_split.sh
 TEST_PROGS += test_teardown_add_during_del.sh
 TEST_PROGS += test_teardown_clean_shutdown.sh
+TEST_PROGS += test_teardown_end_recovery.sh
 
 TEST_FILES := settings
 
