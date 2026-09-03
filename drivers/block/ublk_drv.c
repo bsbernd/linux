@@ -776,10 +776,16 @@ static inline int ublk_io_evts_init(struct ublk_queue *q, unsigned int size,
 	return kfifo_alloc_node(&q->evts_fifo, size, GFP_KERNEL, numa_node);
 }
 
-/* Check if event queue is empty */
+/*
+ * Check if event queue is empty
+ *
+ * Both callers check without ->evts_lock, which producers hold while adding.
+ * The smp_mb() pair in ublk_batch_dispatch() and __ublk_acquire_fcmd() is what
+ * keeps that safe, so the race on the fifo index is intended.
+ */
 static inline bool ublk_io_evts_empty(const struct ublk_queue *q)
 {
-	return kfifo_is_empty(&q->evts_fifo);
+	return data_race(kfifo_is_empty(&q->evts_fifo));
 }
 
 static inline void ublk_io_evts_deinit(struct ublk_queue *q)
