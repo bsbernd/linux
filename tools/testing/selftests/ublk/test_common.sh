@@ -269,7 +269,24 @@ _ublk_wait_tag_flag_gone() {
 	done
 
 	echo "dev ${dev_id} still has ${flag} tags after ${deadline}s:"
-	grep "$flag" "${dir}/${dev_id}/tags" | sed 's/^/\t/'
+	# the event ring prints under the tag line and carries io_flags rather
+	# than flag names, so match on the tag line and keep what follows it
+	awk -v flag="$flag" '
+		/^queue / { keep = 0 }
+		/^  tag / { keep = index($0, flag) > 0 }
+		keep      { print "\t" $0 }
+	' "${dir}/${dev_id}/tags"
+
+	# A tag can carry the flag because it is stranded or because it is
+	# serving I/O right now. Only the first is a driver bug, and completions
+	# still advancing is what tells them apart.
+	if [ -r "/sys/block/ublkb${dev_id}/stat" ]; then
+		echo "	stat  t0: $(cat "/sys/block/ublkb${dev_id}/stat")"
+		echo "	infl  t0: $(cat "/sys/block/ublkb${dev_id}/inflight" 2>/dev/null)"
+		sleep 2
+		echo "	stat  t2: $(cat "/sys/block/ublkb${dev_id}/stat")"
+		echo "	infl  t2: $(cat "/sys/block/ublkb${dev_id}/inflight" 2>/dev/null)"
+	fi
 	return 1
 }
 
