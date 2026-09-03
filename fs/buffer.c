@@ -988,7 +988,12 @@ __getblk_slow(struct block_device *bdev, sector_t block,
  */
 void mark_buffer_dirty(struct buffer_head *bh)
 {
-	WARN_ON_ONCE(!buffer_uptodate(bh));
+	/*
+	 * A failed writeback clears BH_Uptodate while the folio is unlocked, so
+	 * a redirty racing it legitimately finds the buffer not uptodate.
+	 * BH_Write_EIO is set just before that clear, so it marks the case.
+	 */
+	WARN_ON_ONCE(!buffer_uptodate(bh) && !buffer_write_io_error(bh));
 
 	trace_block_dirty_buffer(bh);
 
