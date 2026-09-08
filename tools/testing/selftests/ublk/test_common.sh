@@ -679,8 +679,8 @@ __ublk_quiesce_dev()
 	local state
 
 	if ! ${UBLK_PROG} quiesce -n "${dev_id}"; then
-		state=$(_get_ublk_dev_state "${dev_id}")
-		return "$state"
+		_get_ublk_dev_state "${dev_id}"
+		return
 	fi
 
 	for ((j=0;j<100*UBLK_WAIT_SCALE;j++)); do
