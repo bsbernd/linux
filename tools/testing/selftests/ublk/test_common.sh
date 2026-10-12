@@ -155,6 +155,9 @@ _check_dmesg() {
 # request. Scale every wait from one place rather than per call site.
 UBLK_WAIT_SCALE=${UBLK_WAIT_SCALE:-1}
 
+# How long a test sleeps for a driver state it cannot read
+UBLK_STATE_SLEEP=$((3 * UBLK_WAIT_SCALE))
+
 # A teardown that loses a request never returns, and an unbounded delete
 # wedges the whole run instead of the case that hit it. It also holds
 # ublk_ctl_mutex, so every later add and delete wedges behind it.
@@ -617,6 +620,52 @@ _get_metadata_size()
 	local field=$2
 
 	"$METADATA_SIZE_PROG" "/dev/ublkb$dev_id" | grep "$field" | grep -o "[0-9]*"
+}
+
+# Return 0 once the process has exited, 1 if it is still there at the deadline.
+# Usage: _ublk_wait_pid_gone <pid> <deadline>
+_ublk_wait_pid_gone() {
+	local pid=$1
+	local secs=0
+
+	while [ "$secs" -lt "$2" ]; do
+		if ! kill -0 "$pid" 2>/dev/null; then
+			wait "$pid" > /dev/null 2>&1
+			return 0
+		fi
+		sleep 1
+		secs=$((secs + 1))
+	done
+	return 1
+}
+
+# a read: closing a device opened for writing makes udev probe it again
+_ublk_read_one_block() {
+	dd if=/dev/ublkb"$1" of=/dev/null iflag=direct bs=4k count=1
+}
+
+# Wait for a line the kernel logged after this test started.
+# Usage: _ublk_wait_kmsg <text> <deadline>
+_ublk_wait_kmsg() {
+	local text=$1
+	local deadline=$2
+	local from
+	local secs=0
+
+	from=$(dmesg | grep -n "ublk selftest: ${TID} starting" | tail -1 |
+		cut -d: -f1)
+	while [ "$secs" -lt "$deadline" ]; do
+		if dmesg | tail -n +$((from + 1)) | grep -q "$text"; then
+			return 0
+		fi
+		sleep 1
+		secs=$((secs + 1))
+	done
+	return 1
+}
+
+_ublk_stop_dev() {
+	"${UBLK_PROG}" stop -n "$1"
 }
 
 UBLK_PROG=$(_ublk_test_top_dir)/kublk
