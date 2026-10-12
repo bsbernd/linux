@@ -2580,7 +2580,7 @@ static void ublk_reset_ch_dev(struct ublk_device *ub)
 
 	/* set to NULL, otherwise new tasks cannot mmap io_cmd_buf */
 	ub->mm = NULL;
-	ub->nr_queue_ready = 0;
+	WRITE_ONCE(ub->nr_queue_ready, 0);
 	ub->unprivileged_daemons = false;
 	ub->ublksrv_tgid = -1;
 }
@@ -3112,7 +3112,7 @@ static inline bool ublk_queue_ready(const struct ublk_queue *ubq)
 
 static inline bool ublk_dev_ready(const struct ublk_device *ub)
 {
-	return ub->nr_queue_ready == ub->dev_info.nr_hw_queues;
+	return READ_ONCE(ub->nr_queue_ready) == ub->dev_info.nr_hw_queues;
 }
 
 static void ublk_cancel_queue(struct ublk_queue *ubq)
@@ -3258,7 +3258,7 @@ static void ublk_mark_io_ready(struct ublk_device *ub, u16 q_id,
 
 	/* Check if this specific queue is now fully ready */
 	if (ublk_queue_ready(ubq)) {
-		ub->nr_queue_ready++;
+		WRITE_ONCE(ub->nr_queue_ready, ub->nr_queue_ready + 1);
 
 		/*
 		 * Reset queue flags as soon as this queue is ready.
@@ -3552,10 +3552,12 @@ static int ublk_fetch(struct io_uring_cmd *cmd, struct ublk_device *ub,
 	int ret;
 
 	/*
-	 * When handling FETCH command for setting up ublk uring queue,
-	 * ub->mutex is the innermost lock, and we won't block for handling
-	 * FETCH, so it is fine even for IO_URING_F_NONBLOCK.
+	 * Refuse a ready device before ub->mutex: STOP_DEV holds it across
+	 * del_gendisk(), which waits for requests whose task work runs here.
 	 */
+	if (ublk_dev_ready(ub))
+		return -EBUSY;
+
 	mutex_lock(&ub->mutex);
 	ret = ublk_validate_io_buf(ub, cmd, &auto_buf);
 	if (!ret)
@@ -3953,7 +3955,8 @@ static int ublk_batch_unprep_io(struct ublk_queue *ubq,
 	 * canceling flag to prevent new requests from being queued.
 	 */
 	if (ublk_queue_ready(ubq)) {
-		data->ub->nr_queue_ready--;
+		WRITE_ONCE(data->ub->nr_queue_ready,
+			   data->ub->nr_queue_ready - 1);
 		spin_lock(&ubq->cancel_lock);
 		WRITE_ONCE(ubq->canceling, true);
 		spin_unlock(&ubq->cancel_lock);
