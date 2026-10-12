@@ -1043,6 +1043,78 @@ static int ublk_reap_events_uring(struct ublk_thread *t)
 	return count;
 }
 
+/*
+ * --refetch_on_signal: SIGUSR1 parks the IO thread in user space, SIGUSR2
+ * makes it send one more FETCH_REQ on tag 0 and reap again.
+ */
+enum ublk_refetch_state {
+	UBLK_REFETCH_IDLE,
+	UBLK_REFETCH_PARKED,
+	UBLK_REFETCH_SEND,
+};
+
+static volatile sig_atomic_t ublk_refetch_state;
+
+static void ublk_refetch_signal(int sig)
+{
+	if (sig == SIGUSR1)
+		ublk_refetch_state = UBLK_REFETCH_PARKED;
+	else
+		ublk_refetch_state = UBLK_REFETCH_SEND;
+}
+
+/* The daemon has no stdout, so the test reads its markers from the kernel log. */
+static void ublk_kmsg(const char *fmt, ...)
+{
+	char buf[128];
+	va_list ap;
+	int len;
+	int fd;
+
+	va_start(ap, fmt);
+	len = vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+
+	fd = open("/dev/kmsg", O_WRONLY);
+	if (fd < 0)
+		return;
+	if (write(fd, buf, len) != len)
+		ublk_err("%s: write /dev/kmsg failed\n", __func__);
+	close(fd);
+}
+
+static void ublk_refetch_on_signal(struct ublk_thread *t)
+{
+	int dev_id = t->dev->dev_info.dev_id;
+	struct ublk_io *io = &t->dev->q[0].ios[0];
+	struct io_uring_cqe *cqe;
+	sigset_t usr2, old;
+
+	if (ublk_refetch_state != UBLK_REFETCH_PARKED)
+		return;
+
+	/* IORING_SETUP_DEFER_TASKRUN: no task work runs outside io_uring_enter() */
+	sigemptyset(&usr2);
+	sigaddset(&usr2, SIGUSR2);
+	pthread_sigmask(SIG_BLOCK, &usr2, &old);
+	ublk_kmsg("kublk: dev %d stopped reaping\n", dev_id);
+	/* SIGUSR2 is blocked up to sigsuspend(), so it cannot be lost */
+	while (ublk_refetch_state == UBLK_REFETCH_PARKED)
+		sigsuspend(&old);
+	pthread_sigmask(SIG_SETMASK, &old, NULL);
+	ublk_refetch_state = UBLK_REFETCH_IDLE;
+
+	io->flags = UBLKS_IO_FREE | UBLKS_IO_NEED_FETCH_RQ;
+	ublk_queue_io_cmd(t, io);
+	io_uring_submit(&t->ring);
+
+	/* the CQ was empty when parking, so the first CQE is this FETCH_REQ */
+	if (io_uring_peek_cqe(&t->ring, &cqe) == 0 &&
+	    user_data_to_op(cqe->user_data) == _IOC_NR(UBLK_U_IO_FETCH_REQ))
+		ublk_kmsg("kublk: dev %d FETCH_REQ on tag 0: res %d\n",
+			  dev_id, cqe->res);
+}
+
 static int ublk_process_io(struct ublk_thread *t)
 {
 	int ret, reapped;
@@ -1148,6 +1220,8 @@ static __attribute__((noinline)) int __ublk_io_handler_fn(struct ublk_thread_inf
 		if (ublk_process_io(&t) < 0)
 			break;
 		ublk_release_held_io(&t);
+		if (t.dev->refetch_on_signal)
+			ublk_refetch_on_signal(&t);
 	} while (1);
 
 	ublk_dbg(UBLK_DBG_THREAD, "tid %d: ublk dev %d thread %d exiting\n",
@@ -1593,6 +1667,8 @@ static int ublk_start_daemon(const struct dev_ctx *ctx, struct ublk_dev *dev)
 
 	if (ctx->hold_io_on_signal)
 		ublk_setup_usr_signals(ublk_hold_io_signal);
+	if (dev->refetch_on_signal)
+		ublk_setup_usr_signals(ublk_refetch_signal);
 
 	for (i = 0; i < dev->nthreads; i++)
 		sem_wait(&ready);
@@ -1840,6 +1916,7 @@ static int __cmd_dev_add(const struct dev_ctx *ctx)
 	dev->tgt.ops = ops;
 	dev->tgt.sq_depth = depth;
 	dev->tgt.cq_depth = depth;
+	dev->refetch_on_signal = ctx->refetch_on_signal;
 
 	for (i = 0; i < MAX_BACK_FILES; i++) {
 		if (ctx->files[i]) {
@@ -2234,6 +2311,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--foreground] [--quiet] [-z] [--auto_zc] [--auto_zc_fallback] [--debug_mask mask] [-r 0|1] [-g] [-u]\n");
 	printf("\t[-e 0|1 ] [-i 0|1] [--no_ublk_fixed_fd]\n");
 	printf("\t[--nthreads threads] [--per_io_tasks]\n");
+	printf("\t[--refetch_on_signal] SIGUSR1 stops reaping, SIGUSR2 sends FETCH_REQ on tag 0\n");
 	printf("\t[--integrity_capable] [--integrity_reftag] [--metadata_size SIZE] "
 		 "[--pi_offset OFFSET] [--csum_type ip|t10dif|nvme] [--tag_size SIZE]\n");
 	printf("\t[--batch|-b] [--rotate_auto_buf] [--no_auto_part_scan]\n");
@@ -2314,6 +2392,7 @@ int main(int argc, char *argv[])
 		{ "csum_type",		1,	NULL,  0 },
 		{ "tag_size",		1,	NULL,  0 },
 		{ "safe",		0,	NULL,  0 },
+		{ "refetch_on_signal",	0,	NULL,  0 },
 		{ "batch",              0,      NULL, 'b'},
 		{ "rotate_auto_buf",	0,	NULL,  0 },
 		{ "no_auto_part_scan",	0,	NULL,  0 },
@@ -2463,6 +2542,8 @@ int main(int argc, char *argv[])
 				ctx.tag_size = strtoul(optarg, NULL, 0);
 			if (!strcmp(longopts[option_idx].name, "safe"))
 				ctx.safe_stop = 1;
+			if (!strcmp(longopts[option_idx].name, "refetch_on_signal"))
+				ctx.refetch_on_signal = 1;
 			if (!strcmp(longopts[option_idx].name, "no_auto_part_scan"))
 				ctx.flags |= UBLK_F_NO_AUTO_PART_SCAN;
 			if (!strcmp(longopts[option_idx].name, "shmem_zc"))
@@ -2530,6 +2611,14 @@ int main(int argc, char *argv[])
 
 	if (ctx.per_io_tasks && (ctx.flags & UBLK_F_BATCH_IO)) {
 		ublk_err("per_io_task and F_BATCH_IO conflict\n");
+		return -EINVAL;
+	}
+
+	/* the FETCH_REQ goes to queue 0 from the one IO thread there is */
+	if (ctx.refetch_on_signal &&
+	    (ctx.nr_hw_queues != 1 || ctx.nthreads > 1 ||
+	     (ctx.flags & UBLK_F_BATCH_IO))) {
+		ublk_err("refetch_on_signal needs one queue, one thread, no batch\n");
 		return -EINVAL;
 	}
 
