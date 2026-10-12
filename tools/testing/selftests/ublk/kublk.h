@@ -86,6 +86,7 @@ struct dev_ctx {
 	unsigned short nthreads;
 	unsigned queue_depth;
 	int dev_id;
+	int defer_fetch_queue;
 	int nr_files;
 	char *files[MAX_BACK_FILES];
 	unsigned int	logging:1;
@@ -299,6 +300,8 @@ struct ublk_dev {
 	struct io_uring ring;
 	unsigned refetch_on_signal;
 	unsigned park_on_signal;
+	/* queue whose FETCH_REQs wait for SIGUSR2, -1 for none */
+	int defer_fetch_queue;
 
 	void *private_data;
 };

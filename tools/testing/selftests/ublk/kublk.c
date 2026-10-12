@@ -583,7 +583,8 @@ int ublk_queue_io_cmd(struct ublk_thread *t, struct ublk_io *io)
 	return 1;
 }
 
-static void ublk_submit_fetch_commands(struct ublk_thread *t)
+/* deferred: the FETCH_REQs of the queue that waits for SIGUSR2, else all others */
+static void ublk_submit_fetch_commands(struct ublk_thread *t, bool deferred)
 {
 	struct ublk_queue *q;
 	struct ublk_io *io;
@@ -608,6 +609,8 @@ static void ublk_submit_fetch_commands(struct ublk_thread *t)
 			q = &t->dev->q[q_id];
 			io = &q->ios[tag];
 			io->buf_index = j++;
+			if ((q_id == t->dev->defer_fetch_queue) != deferred)
+				continue;
 			if (q->tgt_ops->pre_fetch_io)
 				q->tgt_ops->pre_fetch_io(t, q, tag, false);
 			ublk_queue_io_cmd(t, io);
@@ -796,7 +799,8 @@ static int ublk_reap_events_uring(struct ublk_thread *t)
 
 /*
  * --refetch_on_signal: SIGUSR1 parks the IO thread in user space, SIGUSR2
- * makes it send one more FETCH_REQ on tag 0 and reap again.
+ * makes it send one more FETCH_REQ on tag 0, or with --defer_fetch_queue the
+ * FETCH_REQs of that queue, and reap again.
  */
 enum ublk_refetch_state {
 	UBLK_REFETCH_IDLE,
@@ -858,6 +862,11 @@ static void ublk_refetch_on_signal(struct ublk_thread *t)
 	/* --park_on_signal: SIGUSR2 only resumes reaping */
 	if (t->dev->park_on_signal)
 		return;
+	if (t->dev->defer_fetch_queue >= 0) {
+		ublk_submit_fetch_commands(t, true);
+		io_uring_submit(&t->ring);
+		return;
+	}
 
 	io->flags = UBLKS_IO_FREE | UBLKS_IO_NEED_FETCH_RQ;
 	ublk_queue_io_cmd(t, io);
@@ -1039,7 +1048,7 @@ static __attribute__((noinline)) int __ublk_io_handler_fn(struct ublk_thread_inf
 
 	if (!ublk_thread_batch_io(&t)) {
 		/* submit all io commands to ublk driver */
-		ublk_submit_fetch_commands(&t);
+		ublk_submit_fetch_commands(&t, false);
 	} else {
 		ublk_batch_setup_queues(&t);
 		ublk_batch_start_fetch(&t);
@@ -1734,6 +1743,7 @@ static int __cmd_dev_add(const struct dev_ctx *ctx)
 	dev->tgt.cq_depth = depth;
 	dev->refetch_on_signal = ctx->refetch_on_signal;
 	dev->park_on_signal = ctx->park_on_signal;
+	dev->defer_fetch_queue = ctx->defer_fetch_queue;
 
 	for (i = 0; i < MAX_BACK_FILES; i++) {
 		if (ctx->files[i]) {
@@ -2131,6 +2141,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--nthreads threads] [--per_io_tasks]\n");
 	printf("\t[--refetch_on_signal] SIGUSR1 stops reaping, SIGUSR2 sends FETCH_REQ on tag 0\n");
 	printf("\t[--park_on_signal] SIGUSR1 stops reaping, SIGUSR2 resumes it\n");
+	printf("\t[--defer_fetch_queue q] with --refetch_on_signal: queue q's FETCH_REQs only on SIGUSR2\n");
 	printf("\t[--integrity_capable] [--integrity_reftag] [--metadata_size SIZE] "
 		 "[--pi_offset OFFSET] [--csum_type ip|t10dif|nvme] [--tag_size SIZE]\n");
 	printf("\t[--batch|-b] [--rotate_auto_buf] [--no_auto_part_scan]\n");
@@ -2216,6 +2227,7 @@ int main(int argc, char *argv[])
 		{ "safe",		0,	NULL,  0 },
 		{ "refetch_on_signal",	0,	NULL,  0 },
 		{ "park_on_signal",	0,	NULL,  0 },
+		{ "defer_fetch_queue",	1,	NULL,  0 },
 		{ "batch",              0,      NULL, 'b'},
 		{ "rotate_auto_buf",	0,	NULL,  0 },
 		{ "hold_io",		0,	NULL,  0 },
@@ -2248,6 +2260,7 @@ int main(int argc, char *argv[])
 		.queue_depth	=	128,
 		.nr_hw_queues	=	2,
 		.dev_id		=	-1,
+		.defer_fetch_queue =	-1,
 		.tgt_type	=	"unknown",
 		.csum_type	=	LBMD_PI_CSUM_NONE,
 		.io_desc_size	=	sizeof(struct ublksrv_io_desc),
@@ -2376,6 +2389,8 @@ int main(int argc, char *argv[])
 				ctx.refetch_on_signal = 1;
 				ctx.park_on_signal = 1;
 			}
+			if (!strcmp(longopts[option_idx].name, "defer_fetch_queue"))
+				ctx.defer_fetch_queue = strtol(optarg, NULL, 10);
 			if (!strcmp(longopts[option_idx].name, "no_auto_part_scan"))
 				ctx.flags |= UBLK_F_NO_AUTO_PART_SCAN;
 			if (!strcmp(longopts[option_idx].name, "hold_io"))
@@ -2451,10 +2466,18 @@ int main(int argc, char *argv[])
 	}
 
 	/* the FETCH_REQ goes to queue 0 from the one IO thread there is */
-	if (ctx.refetch_on_signal &&
+	if (ctx.refetch_on_signal && ctx.defer_fetch_queue < 0 &&
 	    (ctx.nr_hw_queues != 1 || ctx.nthreads > 1 ||
 	     (ctx.flags & UBLK_F_BATCH_IO))) {
 		ublk_err("refetch_on_signal needs one queue, one thread, no batch\n");
+		return -EINVAL;
+	}
+
+	/* the one IO thread serves every queue and takes the two signals */
+	if (ctx.defer_fetch_queue >= 0 &&
+	    (!ctx.refetch_on_signal || !ctx.per_io_tasks || ctx.nthreads != 1 ||
+	     (unsigned)ctx.defer_fetch_queue >= ctx.nr_hw_queues)) {
+		ublk_err("defer_fetch_queue needs refetch_on_signal, per_io_tasks, one thread, an existing queue\n");
 		return -EINVAL;
 	}
 
