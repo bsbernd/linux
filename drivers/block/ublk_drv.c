@@ -399,6 +399,7 @@ struct ublk_delay_points {
 	struct ublk_delay_point	cancel_dev;
 	struct ublk_delay_point	cancel_check;
 	struct ublk_delay_point	cancel_cmd_done;
+	struct ublk_delay_point	dispatch;
 };
 
 static u32 ublk_delay_point_us(struct ublk_delay_point *point)
@@ -1897,7 +1898,11 @@ static void ublk_dispatch_req(struct ublk_queue *ubq, struct request *req)
 	unsigned int issue_flags = IO_URING_CMD_TASK_WORK_ISSUE_FLAGS;
 	u16 tag = req->tag;
 	struct ublk_io *io = &ubq->ios[tag];
+	u32 delay_us = ublk_delay_us(ubq->dev, dispatch);
 
+	/* emulates the server's task work running late */
+	if (delay_us)
+		msleep(delay_us / USEC_PER_MSEC);
 	ublk_io_lock(io);
 	io->flags &= ~UBLK_IO_FLAG_CMD_TW_PENDING;
 	ublk_io_unlock(io);
@@ -4854,6 +4859,8 @@ static void ublk_debugfs_delay_points(struct ublk_device *ub)
 				 ub->debugfs_dir);
 	ublk_debugfs_delay_point(&ub->delay.cancel_cmd_done,
 				 "delay_cancel_cmd_done", ub->debugfs_dir);
+	ublk_debugfs_delay_point(&ub->delay.dispatch, "delay_dispatch",
+				 ub->debugfs_dir);
 }
 #else
 static inline void ublk_debugfs_delay_points(struct ublk_device *ub) { }
