@@ -62,8 +62,9 @@ static int null_queue_zc_io(struct ublk_thread *t, struct ublk_queue *q,
 	const struct ublksrv_io_desc *iod = ublk_get_iod(q, tag);
 	struct io_uring_sqe *sqe[3];
 	unsigned short buf_idx = ublk_io_buf_idx(t, q, tag);
+	bool hold = ublk_should_hold_zc_buf(tag);
 
-	ublk_io_alloc_sqes(t, sqe, 3);
+	ublk_io_alloc_sqes(t, sqe, hold ? 2 : 3);
 
 	io_uring_prep_buf_register(sqe[0], q, tag, q->q_id, buf_idx);
 	sqe[0]->user_data = build_user_data(tag,
@@ -71,6 +72,9 @@ static int null_queue_zc_io(struct ublk_thread *t, struct ublk_queue *q,
 	sqe[0]->flags |= IOSQE_CQE_SKIP_SUCCESS | IOSQE_IO_HARDLINK;
 
 	__setup_nop_io(tag, iod, sqe[1], q->q_id, buf_idx);
+	/* no unregister: the buffer stays registered across the commit */
+	if (hold)
+		return 1;
 	sqe[1]->flags |= IOSQE_IO_HARDLINK;
 
 	io_uring_prep_buf_unregister(sqe[2], q, tag, q->q_id, buf_idx);

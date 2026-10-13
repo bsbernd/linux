@@ -1159,6 +1159,80 @@ static int ublk_process_io(struct ublk_thread *t)
 	return reapped;
 }
 
+/*
+ * --hold_zc_buf: SIGUSR1 makes the next request commit with its zero copy
+ * buffer still registered, SIGUSR2 unregisters that buffer.
+ */
+static struct {
+	volatile sig_atomic_t arm;
+	volatile sig_atomic_t release;
+	int tag;		/* -1: no buffer held */
+	bool committed;
+} ublk_hold_zc = {
+	.tag = -1,
+};
+
+static void ublk_hold_zc_buf_signal(int sig)
+{
+	if (sig == SIGUSR1)
+		ublk_hold_zc.arm = 1;
+	else
+		ublk_hold_zc.release = 1;
+}
+
+bool ublk_should_hold_zc_buf(unsigned tag)
+{
+	bool hold = ublk_hold_zc.arm;
+
+	if (hold) {
+		ublk_hold_zc.arm = 0;
+		ublk_hold_zc.release = 0;
+		ublk_hold_zc.tag = tag;
+		ublk_hold_zc.committed = false;
+	}
+	return hold;
+}
+
+static void ublk_report_or_release_zc_buf(struct ublk_thread *t)
+{
+	int dev_id = t->dev->dev_info.dev_id;
+	struct ublk_queue *q = &t->dev->q[0];
+	int tag = ublk_hold_zc.tag;
+	struct io_uring_sqe *sqe[1];
+	struct io_uring_cqe *cqe;
+	__u64 user_data;
+
+	/* the NOP is done, so the COMMIT_AND_FETCH_REQ is queued */
+	if (tag >= 0 && !ublk_hold_zc.committed && !q->ios[tag].tgt_ios) {
+		/* a uring_cmd is issued inline: the tag is parked again on return */
+		io_uring_submit(&t->ring);
+		ublk_kmsg("kublk: dev %d tag %d committed, buffer held\n",
+			  dev_id, tag);
+		ublk_hold_zc.committed = true;
+	}
+
+	if (tag >= 0 && ublk_hold_zc.release) {
+		ublk_hold_zc.release = 0;
+		ublk_hold_zc.tag = -1;
+
+		ublk_io_alloc_sqes(t, sqe, 1);
+		io_uring_prep_buf_unregister(sqe[0], q, tag, q->q_id,
+					     ublk_io_buf_idx(t, q, tag));
+		user_data = build_user_data(tag,
+				ublk_cmd_op_nr(sqe[0]->cmd_op), 0, q->q_id, 1);
+		sqe[0]->user_data = user_data;
+		io_uring_submit(&t->ring);
+
+		/* the CQ was reaped empty and the unregister completes inline */
+		if (io_uring_peek_cqe(&t->ring, &cqe) == 0 &&
+		    cqe->user_data == user_data) {
+			ublk_kmsg("kublk: dev %d tag %d buffer released: res %d\n",
+				  dev_id, tag, cqe->res);
+			io_uring_cqe_seen(&t->ring, cqe);
+		}
+	}
+}
+
 struct ublk_thread_info {
 	struct ublk_dev 	*dev;
 	pthread_t		thread;
@@ -1237,6 +1311,7 @@ static __attribute__((noinline)) int __ublk_io_handler_fn(struct ublk_thread_inf
 		ublk_release_held_io(&t);
 		if (t.dev->refetch_on_signal)
 			ublk_refetch_on_signal(&t);
+		ublk_report_or_release_zc_buf(&t);
 	} while (1);
 
 	ublk_dbg(UBLK_DBG_THREAD, "tid %d: ublk dev %d thread %d exiting\n",
@@ -1684,6 +1759,8 @@ static int ublk_start_daemon(const struct dev_ctx *ctx, struct ublk_dev *dev)
 		ublk_setup_usr_signals(ublk_hold_io_signal);
 	if (dev->refetch_on_signal)
 		ublk_setup_usr_signals(ublk_refetch_signal);
+	if (ctx->hold_zc_buf)
+		ublk_setup_usr_signals(ublk_hold_zc_buf_signal);
 
 	for (i = 0; i < dev->nthreads; i++)
 		sem_wait(&ready);
@@ -2327,6 +2404,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("%s %s -t [null|loop|stripe|fault_inject] [-q nr_queues] [-d depth] [-n dev_id]\n",
 			exe, recovery ? "recover" : "add");
 	printf("\t[--foreground] [--quiet] [-z] [--auto_zc] [--auto_zc_fallback] [--debug_mask mask] [-r 0|1] [-g] [-u]\n");
+	printf("\t[--hold_zc_buf] with -t null -z: SIGUSR1 commits the next request with its buffer registered, SIGUSR2 unregisters it\n");
 	printf("\t[-e 0|1 ] [-i 0|1] [--no_ublk_fixed_fd]\n");
 	printf("\t[--nthreads threads] [--per_io_tasks]\n");
 	printf("\t[--refetch_on_signal] SIGUSR1 stops reaping, SIGUSR2 sends FETCH_REQ on tag 0\n");
@@ -2394,6 +2472,7 @@ int main(int argc, char *argv[])
 		{ "debug_mask",		1,	NULL,  0  },
 		{ "quiet",		0,	NULL,  0  },
 		{ "zero_copy",          0,      NULL, 'z' },
+		{ "hold_zc_buf",	0,	NULL,  0 },
 		{ "foreground",		0,	NULL,  0  },
 		{ "recovery", 		1,      NULL, 'r' },
 		{ "recovery_fail_io",	1,	NULL, 'e'},
@@ -2564,6 +2643,8 @@ int main(int argc, char *argv[])
 			}
 			if (!strcmp(longopts[option_idx].name, "tag_size"))
 				ctx.tag_size = strtoul(optarg, NULL, 0);
+			if (!strcmp(longopts[option_idx].name, "hold_zc_buf"))
+				ctx.hold_zc_buf = 1;
 			if (!strcmp(longopts[option_idx].name, "safe"))
 				ctx.safe_stop = 1;
 			if (!strcmp(longopts[option_idx].name, "refetch_on_signal"))
@@ -2677,6 +2758,15 @@ int main(int argc, char *argv[])
 	    (ctx.flags & UBLK_F_AUTO_BUF_REG && !ctx.auto_zc_fallback) +
 	    ctx.auto_zc_fallback > 1) {
 		fprintf(stderr, "too many data copy modes specified\n");
+		return -EINVAL;
+	}
+
+	/* the held tag is one static, read only by the null target's zero copy path */
+	if (ctx.hold_zc_buf &&
+	    (strcmp(ctx.tgt_type, "null") || ctx.flags & UBLK_F_AUTO_BUF_REG ||
+	     !(ctx.flags & UBLK_F_SUPPORT_ZERO_COPY) || ctx.nr_hw_queues != 1 ||
+	     ctx.nthreads > 1 || (ctx.flags & UBLK_F_BATCH_IO))) {
+		ublk_err("hold_zc_buf needs -t null -z, one queue, one thread, no batch\n");
 		return -EINVAL;
 	}
 

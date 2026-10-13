@@ -97,6 +97,7 @@ struct dev_ctx {
 	unsigned int	refetch_on_signal:1;
 	unsigned int	refetch_unready:1;
 	unsigned int	park_on_signal:1;
+	unsigned int	hold_zc_buf:1;
 	unsigned int	no_ublk_fixed_fd:1;
 	unsigned int	safe_stop:1;
 	unsigned int	no_auto_part_scan:1;
@@ -651,6 +652,9 @@ static inline void ublk_queued_tgt_io(struct ublk_thread *t, struct ublk_queue *
 		io->result = 0;
 	}
 }
+
+/* --hold_zc_buf: true for the one request that commits with its buffer registered */
+bool ublk_should_hold_zc_buf(unsigned tag);
 
 /* shared memory zero-copy support */
 #define UBLK_BUF_MAX		256
