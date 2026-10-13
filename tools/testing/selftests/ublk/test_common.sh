@@ -823,6 +823,37 @@ _ublk_wait_read_inflight() {
 	return 1
 }
 
+# --foreground takes the device number on the command line.
+_ublk_free_dev_id() {
+	local dev_id=0
+
+	while [ -e /dev/ublkc"${dev_id}" ] || [ -d "${DEBUGFS_ROOT}/${dev_id}" ]; do
+		dev_id=$((dev_id + 1))
+	done
+	echo "$dev_id"
+}
+
+# Usage: _ublk_tag_lines <dev_id> <tag>
+_ublk_tag_lines() {
+	awk -v tag="$2" '$1 == "tag" { in_tag = ($2 == tag) } in_tag' \
+		"${DEBUGFS_ROOT}/$1/tags"
+}
+
+# Usage: _ublk_wait_tags_parked <dev_id> <nr_tags> <deadline>
+_ublk_wait_tags_parked() {
+	local tags=${DEBUGFS_ROOT}/$1/tags
+	local secs=0
+
+	while [ "$secs" -lt "$3" ]; do
+		if [ -f "$tags" ] && [ "$(grep -c CMD_PARKED "$tags")" -eq "$2" ]; then
+			return 0
+		fi
+		sleep 1
+		secs=$((secs + 1))
+	done
+	return 1
+}
+
 UBLK_PROG=$(_ublk_test_top_dir)/kublk
 UBLK_TEST_QUIET=1
 UBLK_TEST_SHOW_RESULT=1

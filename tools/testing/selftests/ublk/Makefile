@@ -81,6 +81,7 @@ TEST_PROGS += test_teardown_cancel_race.sh
 TEST_PROGS += test_teardown_cancel_fn_null_cmd.sh
 TEST_PROGS += test_teardown_quiesce_tw_pending.sh
 TEST_PROGS += test_teardown_quiesce_repark.sh
+TEST_PROGS += test_teardown_fetch_cancel_walk.sh
 TEST_PROGS += test_teardown_fetch_on_stop.sh
 
 TEST_FILES := settings

@@ -874,6 +874,9 @@ static void ublk_submit_fetch_commands(struct ublk_thread *t)
 		for (i = 0; i < q->q_depth; i++) {
 			io = &q->ios[i];
 			io->buf_index = i;
+			/* two tags never fetched: one FETCH_REQ cannot make the device ready */
+			if (t->dev->refetch_unready && i < 2)
+				continue;
 			if (q->tgt_ops->pre_fetch_io)
 				q->tgt_ops->pre_fetch_io(t, q, i, false);
 			ublk_queue_io_cmd(t, io);
@@ -1045,7 +1048,8 @@ static int ublk_reap_events_uring(struct ublk_thread *t)
 
 /*
  * --refetch_on_signal: SIGUSR1 parks the IO thread in user space, SIGUSR2
- * makes it send one more FETCH_REQ on tag 0 and reap again.
+ * makes it send one more FETCH_REQ on tag 0 and reap again, or with
+ * --refetch_unready never again.
  */
 enum ublk_refetch_state {
 	UBLK_REFETCH_IDLE,
@@ -1113,6 +1117,13 @@ static void ublk_refetch_on_signal(struct ublk_thread *t)
 	    user_data_to_op(cqe->user_data) == _IOC_NR(UBLK_U_IO_FETCH_REQ))
 		ublk_kmsg("kublk: dev %d FETCH_REQ on tag 0: res %d\n",
 			  dev_id, cqe->res);
+
+	if (t->dev->refetch_unready) {
+		ublk_kmsg("kublk: dev %d FETCH_REQ on tag 0 returned\n", dev_id);
+		/* no more reaping: the tag state stays as the FETCH_REQ left it */
+		while (true)
+			pause();
+	}
 }
 
 static int ublk_process_io(struct ublk_thread *t)
@@ -1917,6 +1928,7 @@ static int __cmd_dev_add(const struct dev_ctx *ctx)
 	dev->tgt.sq_depth = depth;
 	dev->tgt.cq_depth = depth;
 	dev->refetch_on_signal = ctx->refetch_on_signal;
+	dev->refetch_unready = ctx->refetch_unready;
 
 	for (i = 0; i < MAX_BACK_FILES; i++) {
 		if (ctx->files[i]) {
@@ -2312,6 +2324,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[-e 0|1 ] [-i 0|1] [--no_ublk_fixed_fd]\n");
 	printf("\t[--nthreads threads] [--per_io_tasks]\n");
 	printf("\t[--refetch_on_signal] SIGUSR1 stops reaping, SIGUSR2 sends FETCH_REQ on tag 0\n");
+	printf("\t[--refetch_unready] with --refetch_on_signal: tags 0 and 1 unfetched, no reaping after SIGUSR2\n");
 	printf("\t[--integrity_capable] [--integrity_reftag] [--metadata_size SIZE] "
 		 "[--pi_offset OFFSET] [--csum_type ip|t10dif|nvme] [--tag_size SIZE]\n");
 	printf("\t[--batch|-b] [--rotate_auto_buf] [--no_auto_part_scan]\n");
@@ -2393,6 +2406,7 @@ int main(int argc, char *argv[])
 		{ "tag_size",		1,	NULL,  0 },
 		{ "safe",		0,	NULL,  0 },
 		{ "refetch_on_signal",	0,	NULL,  0 },
+		{ "refetch_unready",	0,	NULL,  0 },
 		{ "batch",              0,      NULL, 'b'},
 		{ "rotate_auto_buf",	0,	NULL,  0 },
 		{ "no_auto_part_scan",	0,	NULL,  0 },
@@ -2544,6 +2558,8 @@ int main(int argc, char *argv[])
 				ctx.safe_stop = 1;
 			if (!strcmp(longopts[option_idx].name, "refetch_on_signal"))
 				ctx.refetch_on_signal = 1;
+			if (!strcmp(longopts[option_idx].name, "refetch_unready"))
+				ctx.refetch_unready = 1;
 			if (!strcmp(longopts[option_idx].name, "no_auto_part_scan"))
 				ctx.flags |= UBLK_F_NO_AUTO_PART_SCAN;
 			if (!strcmp(longopts[option_idx].name, "shmem_zc"))
@@ -2619,6 +2635,12 @@ int main(int argc, char *argv[])
 	    (ctx.nr_hw_queues != 1 || ctx.nthreads > 1 ||
 	     (ctx.flags & UBLK_F_BATCH_IO))) {
 		ublk_err("refetch_on_signal needs one queue, one thread, no batch\n");
+		return -EINVAL;
+	}
+
+	if (ctx.refetch_unready &&
+	    (!ctx.refetch_on_signal || ctx.per_io_tasks || ctx.queue_depth < 3)) {
+		ublk_err("refetch_unready needs refetch_on_signal, no per_io_tasks, depth 3 or more\n");
 		return -EINVAL;
 	}
 

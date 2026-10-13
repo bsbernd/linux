@@ -95,6 +95,7 @@ struct dev_ctx {
 	unsigned int	auto_zc_fallback:1;
 	unsigned int	per_io_tasks:1;
 	unsigned int	refetch_on_signal:1;
+	unsigned int	refetch_unready:1;
 	unsigned int	no_ublk_fixed_fd:1;
 	unsigned int	safe_stop:1;
 	unsigned int	no_auto_part_scan:1;
@@ -292,6 +293,7 @@ struct ublk_dev {
 	int ctrl_fd;
 	struct io_uring ring;
 	unsigned refetch_on_signal;
+	unsigned refetch_unready;
 
 	void *private_data;
 };
