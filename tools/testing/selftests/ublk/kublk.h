@@ -92,6 +92,7 @@ struct dev_ctx {
 	unsigned int	all:1;
 	unsigned int	fg:1;
 	unsigned int	recovery:1;
+	unsigned int	no_end_recovery:1;
 	unsigned int	auto_zc_fallback:1;
 	unsigned int	per_io_tasks:1;
 	unsigned int	refetch_on_signal:1;

@@ -1772,9 +1772,11 @@ static int ublk_start_daemon(const struct dev_ctx *ctx, struct ublk_dev *dev)
 	free(q_thread_map);
 
 	/* everything is fine now, start us */
-	if (ctx->recovery)
-		ret = ublk_ctrl_end_user_recovery(dev, getpid());
-	else {
+	if (ctx->recovery) {
+		/* --no_end_recovery: attached, but the device stays QUIESCED */
+		if (!ctx->no_end_recovery)
+			ret = ublk_ctrl_end_user_recovery(dev, getpid());
+	} else {
 		ublk_set_parameters(dev);
 		ret = ublk_ctrl_start_dev(dev, getpid());
 	}
@@ -2412,6 +2414,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--foreground] [--quiet] [-z] [--auto_zc] [--auto_zc_fallback] [--debug_mask mask] [-r 0|1] [-g] [-u]\n");
 	printf("\t[--hold_zc_buf] with -t null -z: SIGUSR1 commits the next request with its buffer registered, SIGUSR2 unregisters it\n");
 	printf("\t[-e 0|1 ] [-i 0|1] [--no_ublk_fixed_fd]\n");
+	printf("\t[--no_end_recovery] recover: fetch, but never send END_USER_RECOVERY\n");
 	printf("\t[--nthreads threads] [--per_io_tasks]\n");
 	printf("\t[--refetch_on_signal] SIGUSR1 stops reaping, SIGUSR2 sends FETCH_REQ on tag 0\n");
 	printf("\t[--refetch_unready] with --refetch_on_signal: tags 0 and 1 unfetched, no reaping after SIGUSR2\n");
@@ -2485,6 +2488,7 @@ int main(int argc, char *argv[])
 		{ "recovery", 		1,      NULL, 'r' },
 		{ "recovery_fail_io",	1,	NULL, 'e'},
 		{ "recovery_reissue",	1,	NULL, 'i'},
+		{ "no_end_recovery",	0,	NULL,  0 },
 		{ "get_data",		1,	NULL, 'g'},
 		{ "auto_zc",		0,	NULL,  0 },
 		{ "auto_zc_fallback", 	0,	NULL,  0 },
@@ -2655,6 +2659,8 @@ int main(int argc, char *argv[])
 				ctx.tag_size = strtoul(optarg, NULL, 0);
 			if (!strcmp(longopts[option_idx].name, "hold_zc_buf"))
 				ctx.hold_zc_buf = 1;
+			if (!strcmp(longopts[option_idx].name, "no_end_recovery"))
+				ctx.no_end_recovery = 1;
 			if (!strcmp(longopts[option_idx].name, "safe"))
 				ctx.safe_stop = 1;
 			if (!strcmp(longopts[option_idx].name, "refetch_on_signal"))
