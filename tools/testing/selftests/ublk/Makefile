@@ -76,6 +76,7 @@ TEST_PROGS += test_stress_08.sh
 TEST_PROGS += test_stress_09.sh
 
 TEST_PROGS += test_teardown_cancel_race.sh
+TEST_PROGS += test_teardown_quiesce_held_buf.sh
 TEST_PROGS += test_teardown_quiesce_repark.sh
 TEST_PROGS += test_teardown_fetch_on_stop.sh
 TEST_PROGS += test_teardown_quiesce_abandoned.sh
