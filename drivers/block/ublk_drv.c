@@ -395,6 +395,8 @@ struct ublk_delay_point {
 };
 
 struct ublk_delay_points {
+	struct ublk_delay_point	fill_io_cmd;
+	struct ublk_delay_point	cancel_dev;
 	struct ublk_delay_point	cancel_check;
 	struct ublk_delay_point	cancel_cmd_done;
 };
@@ -3131,8 +3133,12 @@ static void ublk_cancel_queue(struct ublk_queue *ubq)
 /* Cancel all pending commands, must be called after del_gendisk() returns */
 static void ublk_cancel_dev(struct ublk_device *ub)
 {
+	u32 delay_us = ublk_delay_us(ub, cancel_dev);
 	u16 i;
 
+	/* emulates the caller being preempted before the walk */
+	if (delay_us)
+		msleep(delay_us / USEC_PER_MSEC);
 	for (i = 0; i < ub->dev_info.nr_hw_queues; i++)
 		ublk_cancel_queue(ublk_get_queue(ub, i));
 }
@@ -3352,12 +3358,20 @@ static inline void ublk_apply_io_buf(const struct ublk_device *ub,
 static inline struct request *
 ublk_fill_io_cmd(struct ublk_io *io, struct io_uring_cmd *cmd)
 {
+	struct ublk_device *ub = cmd->file->private_data;
 	struct request *req = io->req;
+	unsigned int flags;
+	u32 delay_us;
 
 	io->cmd = cmd;
 	io->flags |= UBLK_IO_FLAG_ACTIVE;
 	/* now this cmd slot is owned by ublk driver */
-	io->flags &= ~UBLK_IO_FLAG_OWNED_BY_SRV;
+	flags = READ_ONCE(io->flags);
+	/* emulates a preemption between the load and the store */
+	delay_us = ublk_delay_us(ub, fill_io_cmd);
+	if (delay_us)
+		mdelay(delay_us / USEC_PER_MSEC);
+	WRITE_ONCE(io->flags, flags & ~UBLK_IO_FLAG_OWNED_BY_SRV);
 
 	return req;
 }
@@ -4827,6 +4841,10 @@ static void ublk_debugfs_delay_point(struct ublk_delay_point *point,
 
 static void ublk_debugfs_delay_points(struct ublk_device *ub)
 {
+	ublk_debugfs_delay_point(&ub->delay.fill_io_cmd, "delay_fill_io_cmd",
+				 ub->debugfs_dir);
+	ublk_debugfs_delay_point(&ub->delay.cancel_dev, "delay_cancel_dev",
+				 ub->debugfs_dir);
 	ublk_debugfs_delay_point(&ub->delay.cancel_check, "delay_cancel_check",
 				 ub->debugfs_dir);
 	ublk_debugfs_delay_point(&ub->delay.cancel_cmd_done,
