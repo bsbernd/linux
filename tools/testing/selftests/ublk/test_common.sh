@@ -882,6 +882,24 @@ _ublk_write_one_block() {
 	dd if=/dev/zero of=/dev/ublkb"$1" bs=4k count=1 oflag=direct conv=nocreat
 }
 
+# ub_disk drops to 0 once del_gendisk() returned; the directory goes with
+# the device.
+# Usage: _ublk_wait_disk_detached <dev_id> <deadline>
+_ublk_wait_disk_detached() {
+	local dev_state=${DEBUGFS_ROOT}/$1/dev_state
+	local secs=0
+
+	while [ "$secs" -lt "$2" ]; do
+		if [ ! -e "$dev_state" ] ||
+				grep -q "^ub_disk: 0$" "$dev_state" 2>/dev/null; then
+			return 0
+		fi
+		sleep 1
+		secs=$((secs + 1))
+	done
+	return 1
+}
+
 UBLK_PROG=$(_ublk_test_top_dir)/kublk
 UBLK_TEST_QUIET=1
 UBLK_TEST_SHOW_RESULT=1
