@@ -995,6 +995,8 @@ static void ublk_release_held_io(struct ublk_thread *t)
 	}
 }
 
+static void ublk_kmsg(const char *fmt, ...);
+
 static void ublk_handle_uring_cmd(struct ublk_thread *t,
 				  struct ublk_queue *q,
 				  const struct io_uring_cqe *cqe)
@@ -1028,6 +1030,12 @@ static void ublk_handle_uring_cmd(struct ublk_thread *t,
 		io->flags |= UBLKS_IO_NEED_GET_DATA | UBLKS_IO_FREE;
 		ublk_queue_io_cmd(t, io);
 	} else {
+		/* --hold_io_on_signal: tells the test the kernel refused a commit */
+		if (ublk_hold_io.release &&
+		    user_data_to_op(cqe->user_data) ==
+		    _IOC_NR(UBLK_U_IO_COMMIT_AND_FETCH_REQ))
+			ublk_kmsg("kublk: dev %d COMMIT_AND_FETCH_REQ on tag %u: res %d\n",
+				  t->dev->dev_info.dev_id, tag, cqe->res);
 		/*
 		 * COMMIT_REQ will be completed immediately since no fetching
 		 * piggyback is required.

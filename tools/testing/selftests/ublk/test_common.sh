@@ -1128,6 +1128,39 @@ _ublk_wait_held_tag() {
 	return 1
 }
 
+# Echo the result of a refused commit kublk wrote to the kernel log in this
+# run, empty if none yet.
+# Usage: _ublk_commit_refused_res <dev_id> <tag>
+_ublk_commit_refused_res() {
+	local from
+
+	from=$(dmesg | grep -n "ublk selftest: ${TID} starting" | tail -1 |
+		cut -d: -f1)
+	if [ -z "$from" ]; then
+		from=0
+	fi
+	dmesg | tail -n +$((from + 1)) |
+		sed -n "s/.*kublk: dev $1 COMMIT_AND_FETCH_REQ on tag $2: res //p" |
+		tail -1
+}
+
+# Usage: _ublk_wait_commit_refused_res <dev_id> <tag> <deadline>
+_ublk_wait_commit_refused_res() {
+	local tenths=0
+	local res
+
+	while [ "$tenths" -lt $(($3 * 10)) ]; do
+		res=$(_ublk_commit_refused_res "$1" "$2")
+		if [ -n "$res" ]; then
+			echo "$res"
+			return 0
+		fi
+		sleep 0.1
+		tenths=$((tenths + 1))
+	done
+	return 1
+}
+
 UBLK_PROG=$(_ublk_test_top_dir)/kublk
 UBLK_TEST_QUIET=1
 UBLK_TEST_SHOW_RESULT=1
