@@ -114,6 +114,7 @@ TEST_PROGS += test_teardown_ready_count_mq_cancel.sh
 TEST_PROGS += test_teardown_end_recovery.sh
 TEST_PROGS += test_teardown_ready_count_canceled.sh
 TEST_PROGS += test_teardown_ready_count_takeover.sh
+TEST_PROGS += test_teardown_quiesce_recover_race.sh
 
 TEST_FILES := settings
 TEST_FILES += test_common.sh

@@ -505,6 +505,48 @@ _ublk_dump_dev_state() {
 	sed 's/^/\t/' "${dir}/${dev_id}/tags"
 }
 
+# The server runs, no queue has force_abort set, and every tag parks a
+# command, or with UBLK_F_BATCH_IO every queue holds a fetch command.
+# Usage: __ublk_server_cmds_held <debugfs dir of the device> <nr_tags>
+__ublk_server_cmds_held() {
+	local dir=$1
+	local pid
+
+	pid=$(awk '$1 == "ublksrv_tgid:" { print $2 }' "${dir}/dev_state")
+	if [ -z "$pid" ] || [ "$pid" -le 0 ] || ! kill -0 "$pid" 2>/dev/null; then
+		return 1
+	fi
+	if grep -q "force_abort 1" "${dir}/dev_state"; then
+		return 1
+	fi
+	if grep -q "fetch_cmds" "${dir}/dev_state"; then
+		if grep -q "fetch_cmds 0 active 0" "${dir}/dev_state"; then
+			return 1
+		fi
+		return 0
+	fi
+	if [ "$(grep -c CMD_PARKED "${dir}/tags")" -ne "$2" ]; then
+		return 1
+	fi
+	return 0
+}
+
+# Usage: _ublk_wait_server_cmds <dev_id> <nr_tags> <secs>
+_ublk_wait_server_cmds() {
+	local dir
+	local secs=0
+
+	dir=$(_ublk_debugfs_root)/$1
+	while [ "$secs" -lt "$3" ]; do
+		if __ublk_server_cmds_held "$dir" "$2"; then
+			return 0
+		fi
+		sleep 1
+		secs=$((secs + 1))
+	done
+	return 1
+}
+
 # Quiesce a device and bring it back, over and over, with IO running against
 # it the whole time.
 # Usage: _ublk_run_quiesce_cycles <cycles> <runtime> <add args...>
