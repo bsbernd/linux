@@ -1193,6 +1193,15 @@ _ublk_wait_live() {
 	return 1
 }
 
+# Usage: _ublk_nr_io_ready <dev_id>, the count of queue 0
+_ublk_nr_io_ready() {
+	awk '$1 == "queue" && $2 == "0:" {
+		for (field = 3; field < NF; field++)
+			if ($field == "nr_io_ready")
+				print $(field + 1)
+	}' "${DEBUGFS_ROOT}/$1/dev_state"
+}
+
 UBLK_PROG=$(_ublk_test_top_dir)/kublk
 UBLK_TEST_QUIET=1
 UBLK_TEST_SHOW_RESULT=1
