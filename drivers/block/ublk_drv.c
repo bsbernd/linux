@@ -3819,24 +3819,6 @@ static void ublk_batch_cancel_cmd(struct ublk_queue *ubq,
 	}
 }
 
-static bool ublk_batch_fcmd_listed(struct ublk_queue *ubq,
-				   struct list_head *fcmd_list,
-				   struct ublk_batch_fetch_cmd *fcmd)
-{
-	struct ublk_batch_fetch_cmd *entry;
-	bool listed = false;
-
-	spin_lock(&ubq->evts_lock);
-	list_for_each_entry(entry, fcmd_list, node) {
-		if (entry == fcmd) {
-			listed = true;
-			break;
-		}
-	}
-	spin_unlock(&ubq->evts_lock);
-	return listed;
-}
-
 static void ublk_batch_cancel_queue(struct ublk_queue *ubq)
 {
 	struct ublk_batch_fetch_cmd *fcmd;
@@ -3852,23 +3834,25 @@ static void ublk_batch_cancel_queue(struct ublk_queue *ubq)
 		list_move(&fcmd->node, &ubq->fcmd_head);
 	spin_unlock(&ubq->evts_lock);
 
+	/* ->cancel_fn() claims and frees entries of fcmd_list too */
+	spin_lock(&ubq->evts_lock);
 	while (!list_empty(&fcmd_list)) {
 		u32 delay_us;
 
 		fcmd = list_first_entry(&fcmd_list,
 				struct ublk_batch_fetch_cmd, node);
+		list_del_init(&fcmd->node);
+		spin_unlock(&ubq->evts_lock);
+
 		delay_us = ublk_delay_us(ubq->dev, batch_cancel_walk);
-		if (delay_us) {
+		if (delay_us)
 			msleep(delay_us / USEC_PER_MSEC);
-			/* claimed means freed: report it instead of reading it */
-			if (!ublk_batch_fcmd_listed(ubq, &fcmd_list, fcmd)) {
-				pr_info("ublk%d: batch cancel walk: fetch command claimed by another path\n",
-					ubq->dev->dev_info.dev_id);
-				continue;
-			}
-		}
-		ublk_batch_cancel_cmd(ubq, fcmd, IO_URING_F_UNLOCKED);
+		io_uring_cmd_done(fcmd->cmd, UBLK_IO_RES_ABORT,
+				  IO_URING_F_UNLOCKED);
+		ublk_batch_free_fcmd(fcmd);
+		spin_lock(&ubq->evts_lock);
 	}
+	spin_unlock(&ubq->evts_lock);
 }
 
 static void ublk_batch_cancel_fn(struct io_uring_cmd *cmd,
