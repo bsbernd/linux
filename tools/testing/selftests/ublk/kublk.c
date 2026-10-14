@@ -912,6 +912,26 @@ static void ublk_wait_fetch_signal(void)
 	sigwait(&set, &sig);
 }
 
+/*
+ * --takeover_after_exit: the tags of thread 0 go first, so the queue counts
+ * them before the FETCH_REQs of thread 1's own tags reach the driver.
+ */
+static void ublk_take_over_thread0_tags(struct ublk_thread *t)
+{
+	const struct ublksrv_ctrl_dev_info *dinfo = &t->dev->dev_info;
+	int nr_ios = dinfo->nr_hw_queues * dinfo->queue_depth;
+	struct ublk_io *io;
+	int i;
+
+	/* thread 0's entries in the per_io_tasks order */
+	for (i = 0; i < nr_ios; i += t->dev->nthreads) {
+		io = &t->dev->q[i / dinfo->queue_depth].ios[i % dinfo->queue_depth];
+		/* thread 0 issued it and left without reaping it */
+		io->flags = UBLKS_IO_FREE | UBLKS_IO_NEED_FETCH_RQ;
+		ublk_queue_io_cmd(t, io);
+	}
+}
+
 static int ublk_thread_is_idle(struct ublk_thread *t)
 {
 	return !io_uring_sq_ready(&t->ring) && !t->io_inflight;
@@ -1453,6 +1473,8 @@ static __attribute__((noinline)) int __ublk_io_handler_fn(struct ublk_thread_inf
 
 	if (t.dev->exit_after_fetch && t.idx == 1)
 		ublk_wait_fetch_signal();
+	if (t.dev->takeover_after_exit && t.idx == 1)
+		ublk_take_over_thread0_tags(&t);
 
 	if (!ublk_thread_batch_io(&t)) {
 		/* submit all io commands to ublk driver */
@@ -2220,6 +2242,7 @@ static int __cmd_dev_add(const struct dev_ctx *ctx)
 	dev->nthreads = nthreads;
 	dev->per_io_tasks = ctx->per_io_tasks;
 	dev->exit_after_fetch = ctx->exit_after_fetch;
+	dev->takeover_after_exit = ctx->takeover_after_exit;
 	dev->bad_buf_index = ctx->bad_buf_index;
 	dev->bad_fetch_buf = ctx->bad_fetch_buf;
 	dev->hold_io = ctx->hold_io;
@@ -2628,6 +2651,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--no_end_recovery] recover: fetch, but never send END_USER_RECOVERY\n");
 	printf("\t[--nthreads threads] [--per_io_tasks]\n");
 	printf("\t[--exit_after_fetch] with --per_io_tasks --nthreads 2: thread 0 closes its ring after its FETCH_REQs, thread 1 fetches on SIGUSR2\n");
+	printf("\t[--takeover_after_exit] with --exit_after_fetch: thread 1 fetches the tags of thread 0 before its own\n");
 	printf("\t[--refetch_on_signal] SIGUSR1 stops reaping, SIGUSR2 sends FETCH_REQ on tag 0\n");
 	printf("\t[--refetch_unready] with --refetch_on_signal: tags 0 and 1 unfetched, no reaping after SIGUSR2\n");
 	printf("\t[--park_on_signal] SIGUSR1 stops reaping, SIGUSR2 resumes it; also with --batch\n");
@@ -2714,6 +2738,7 @@ int main(int argc, char *argv[])
 		{ "nthreads",		1,	NULL,  0 },
 		{ "per_io_tasks",	0,	NULL,  0 },
 		{ "exit_after_fetch",	0,	NULL,  0 },
+		{ "takeover_after_exit", 0,	NULL,  0 },
 		{ "no_ublk_fixed_fd",	0,	NULL,  0 },
 		{ "integrity_capable",	0,	NULL,  0 },
 		{ "integrity_reftag",	0,	NULL,  0 },
@@ -2859,6 +2884,8 @@ int main(int argc, char *argv[])
 				ctx.per_io_tasks = 1;
 			if (!strcmp(longopts[option_idx].name, "exit_after_fetch"))
 				ctx.exit_after_fetch = 1;
+			if (!strcmp(longopts[option_idx].name, "takeover_after_exit"))
+				ctx.takeover_after_exit = 1;
 			if (!strcmp(longopts[option_idx].name, "no_ublk_fixed_fd"))
 				ctx.no_ublk_fixed_fd = 1;
 			if (!strcmp(longopts[option_idx].name, "integrity_capable"))
@@ -2987,6 +3014,11 @@ int main(int argc, char *argv[])
 	/* thread 0's queue needs the tags of thread 1, which takes the signal */
 	if (ctx.exit_after_fetch && (!ctx.per_io_tasks || ctx.nthreads != 2)) {
 		ublk_err("exit_after_fetch needs per_io_tasks and two threads\n");
+		return -EINVAL;
+	}
+
+	if (ctx.takeover_after_exit && !ctx.exit_after_fetch) {
+		ublk_err("takeover_after_exit needs exit_after_fetch\n");
 		return -EINVAL;
 	}
 
