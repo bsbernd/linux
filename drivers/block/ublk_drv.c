@@ -2378,6 +2378,33 @@ static void ublk_batch_tw_cb(struct io_tw_req tw_req, io_tw_token_t tw)
 	ublk_batch_dispatch(pdu->ubq, &data, fcmd);
 }
 
+static void ublk_batch_abort_released_fcmd(struct ublk_queue *ubq,
+					   const struct ublk_batch_io_data *data,
+					   struct ublk_batch_fetch_cmd *fcmd)
+{
+	struct ublk_batch_fetch_cmd *entry;
+	bool done = false;
+
+	/* off fcmd_head, the cancel walk's own list holds it and completes it */
+	spin_lock(&ubq->evts_lock);
+	if (!READ_ONCE(ubq->active_fcmd)) {
+		list_for_each_entry(entry, &ubq->fcmd_head, node) {
+			if (entry == fcmd) {
+				list_del_init(&fcmd->node);
+				done = true;
+				break;
+			}
+		}
+	}
+	spin_unlock(&ubq->evts_lock);
+
+	if (done) {
+		io_uring_cmd_done(fcmd->cmd, UBLK_IO_RES_ABORT,
+				  data->issue_flags);
+		ublk_batch_free_fcmd(fcmd);
+	}
+}
+
 static void
 ublk_batch_dispatch(struct ublk_queue *ubq,
 		    const struct ublk_batch_io_data *data,
@@ -2405,10 +2432,17 @@ again:
 	 * checking ubq->evts_fifo.
 	 *
 	 * The pair is the smp_mb() in __ublk_acquire_fcmd().
+	 *
+	 * Also orders it against reading ubq->force_abort, paired with the
+	 * smp_mb() in ublk_batch_cancel_queue().
 	 */
 	smp_mb();
-	if (likely(ublk_io_evts_empty(ubq)))
+	if (likely(ublk_io_evts_empty(ubq))) {
+		/* the cancel walk saw fcmd active and left it on fcmd_head */
+		if (unlikely(READ_ONCE(ubq->force_abort)))
+			ublk_batch_abort_released_fcmd(ubq, data, fcmd);
 		return;
+	}
 
 	spin_lock(&ubq->evts_lock);
 	new_fcmd = __ublk_acquire_fcmd(ubq);
@@ -3362,6 +3396,8 @@ static void ublk_batch_cancel_queue(struct ublk_queue *ubq)
 
 	spin_lock(&ubq->evts_lock);
 	WRITE_ONCE(ubq->force_abort, true);
+	/* pairs with the smp_mb() in ublk_batch_dispatch() */
+	smp_mb();
 	list_splice_init(&ubq->fcmd_head, &fcmd_list);
 	fcmd = READ_ONCE(ubq->active_fcmd);
 	if (fcmd)
