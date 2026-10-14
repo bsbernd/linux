@@ -654,7 +654,7 @@ static void ublk_batch_dispatch(struct ublk_queue *ubq,
 				const struct ublk_batch_io_data *data,
 				struct ublk_batch_fetch_cmd *fcmd);
 static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
-		unsigned int issue_flags);
+		unsigned int issue_flags, bool ring_exit);
 static void ublk_td_dump_evts(const struct ublk_device *ub, struct ublk_io *io,
 			      u16 tag);
 static void ublk_abort_dispatch_queue(struct ublk_queue *ubq);
@@ -3649,13 +3649,11 @@ static bool ublk_abort_started_rq(struct request *rq, void *data)
 	return true;
 }
 
-static void ublk_start_cancel(struct ublk_device *ub)
+static void __ublk_start_cancel(struct ublk_device *ub, struct gendisk *disk)
+	__must_hold(&ub->cancel_mutex)
 {
-	struct gendisk *disk = ublk_get_disk(ub);
-
-	mutex_lock(&ub->cancel_mutex);
 	if (ub->canceling)
-		goto out;
+		return;
 
 	if (disk) {
 		/*
@@ -3674,7 +3672,14 @@ static void ublk_start_cancel(struct ublk_device *ub)
 		 */
 		ublk_set_canceling(ub, true);
 	}
-out:
+}
+
+static void ublk_start_cancel(struct ublk_device *ub)
+{
+	struct gendisk *disk = ublk_get_disk(ub);
+
+	mutex_lock(&ub->cancel_mutex);
+	__ublk_start_cancel(ub, disk);
 	mutex_unlock(&ub->cancel_mutex);
 	ublk_put_disk(disk);
 }
@@ -3706,8 +3711,18 @@ static void ublk_abort_dev(struct ublk_device *ub)
 	mutex_unlock(&ub->cancel_mutex);
 }
 
+static inline bool ublk_queue_ready(const struct ublk_queue *ubq)
+{
+	return READ_ONCE(ubq->nr_io_ready) == ubq->q_depth;
+}
+
+static inline bool ublk_dev_ready(const struct ublk_device *ub)
+{
+	return READ_ONCE(ub->nr_queue_ready) == ub->dev_info.nr_hw_queues;
+}
+
 static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
-		unsigned int issue_flags)
+		unsigned int issue_flags, bool ring_exit)
 {
 	struct ublk_io *io = &ubq->ios[tag];
 	struct ublk_device *ub = ubq->dev;
@@ -3747,6 +3762,18 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 		io->cmd = NULL;
 		/* races ublk_check_canceling() for the same command */
 		ublk_io_moved(io, UBLK_IO_S_INVALID);
+		/*
+		 * A ready queue keeps its count in teardown: uncounting would
+		 * reopen FETCH_REQ. Before the device is ready, a ring exit
+		 * leaves the tag to the next FETCH_REQ instead.
+		 */
+		if (!ublk_queue_ready(ubq)) {
+			WRITE_ONCE(ubq->nr_io_ready, ubq->nr_io_ready - 1);
+		} else if (ring_exit && !ublk_dev_ready(ub)) {
+			WRITE_ONCE(ub->nr_queue_ready, ub->nr_queue_ready - 1);
+			WRITE_ONCE(ubq->canceling, true);
+			WRITE_ONCE(ubq->nr_io_ready, ubq->nr_io_ready - 1);
+		}
 	}
 	ublk_io_check_cmd_flags(ubq, io);
 	spin_unlock(&ubq->cancel_lock);
@@ -3846,6 +3873,7 @@ static void ublk_uring_cmd_cancel_fn(struct io_uring_cmd *cmd,
 	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
 	struct ublk_queue *ubq = pdu->ubq;
 	struct task_struct *task;
+	struct gendisk *disk;
 	struct ublk_io *io;
 	u32 delay_us;
 
@@ -3862,7 +3890,13 @@ static void ublk_uring_cmd_cancel_fn(struct io_uring_cmd *cmd,
 
 	ublk_td_count(ubq->dev, cancel_fn);
 
-	ublk_start_cancel(ubq->dev);
+	/*
+	 * A FETCH_REQ making the queue ready before ublk_cancel_cmd() would
+	 * clear ->canceling and keep this tag counted without a command.
+	 */
+	disk = ublk_get_disk(ubq->dev);
+	mutex_lock(&ubq->dev->cancel_mutex);
+	__ublk_start_cancel(ubq->dev, disk);
 
 	/* emulates the ring's exit work being preempted before the tag */
 	delay_us = ublk_delay_us(ubq->dev, cancel_fn);
@@ -3880,17 +3914,9 @@ static void ublk_uring_cmd_cancel_fn(struct io_uring_cmd *cmd,
 	 * cancelable.
 	 */
 	WARN_ON_ONCE(io->cmd && io->cmd != cmd);
-	ublk_cancel_cmd(ubq, pdu->tag, issue_flags);
-}
-
-static inline bool ublk_queue_ready(const struct ublk_queue *ubq)
-{
-	return ubq->nr_io_ready == ubq->q_depth;
-}
-
-static inline bool ublk_dev_ready(const struct ublk_device *ub)
-{
-	return READ_ONCE(ub->nr_queue_ready) == ub->dev_info.nr_hw_queues;
+	ublk_cancel_cmd(ubq, pdu->tag, issue_flags, true);
+	mutex_unlock(&ubq->dev->cancel_mutex);
+	ublk_put_disk(disk);
 }
 
 static void ublk_cancel_queue(struct ublk_queue *ubq)
@@ -3903,7 +3929,7 @@ static void ublk_cancel_queue(struct ublk_queue *ubq)
 	}
 
 	for (i = 0; i < ubq->q_depth; i++)
-		ublk_cancel_cmd(ubq, i, IO_URING_F_UNLOCKED);
+		ublk_cancel_cmd(ubq, i, IO_URING_F_UNLOCKED, false);
 }
 
 /*
@@ -4103,6 +4129,7 @@ static void ublk_reset_io_flags(struct ublk_queue *ubq, struct ublk_io *io)
 	ublk_io_lock(io);
 	spin_lock(&ubq->cancel_lock);
 	io->flags &= ~UBLK_IO_FLAG_CANCELED;
+	WRITE_ONCE(ubq->nr_io_ready, ubq->nr_io_ready + 1);
 	spin_unlock(&ubq->cancel_lock);
 	ublk_io_unlock(io);
 }
@@ -4127,7 +4154,8 @@ static void ublk_mark_io_ready(struct ublk_device *ub, u16 q_id,
 	if (!ub->unprivileged_daemons && !capable(CAP_SYS_ADMIN))
 		ub->unprivileged_daemons = true;
 
-	ubq->nr_io_ready++;
+	/* a racing cancel sees the count and ->canceling change together */
+	mutex_lock(&ub->cancel_mutex);
 	ublk_reset_io_flags(ubq, io);
 
 	/* Check if this specific queue is now fully ready */
@@ -4148,11 +4176,10 @@ static void ublk_mark_io_ready(struct ublk_device *ub, u16 q_id,
 		 * All queues ready - clear device-level canceling flag
 		 * and wake ublk_dev_ready() waiters.
 		 */
-		mutex_lock(&ub->cancel_mutex);
 		ub->canceling = false;
-		mutex_unlock(&ub->cancel_mutex);
 		wake_up_var(&ub->nr_queue_ready);
 	}
+	mutex_unlock(&ub->cancel_mutex);
 }
 
 static inline int ublk_check_cmd_op(u32 cmd_op)
