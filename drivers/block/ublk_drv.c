@@ -568,6 +568,7 @@ struct ublk_delay_points {
 	struct ublk_delay_point	prep_cancel;
 	struct ublk_delay_point	ready_wait_late;
 	struct ublk_delay_point	cancel_fn;
+	struct ublk_delay_point	batch_cancel_walk;
 };
 
 static u32 ublk_delay_point_us(struct ublk_delay_point *point)
@@ -3818,6 +3819,24 @@ static void ublk_batch_cancel_cmd(struct ublk_queue *ubq,
 	}
 }
 
+static bool ublk_batch_fcmd_listed(struct ublk_queue *ubq,
+				   struct list_head *fcmd_list,
+				   struct ublk_batch_fetch_cmd *fcmd)
+{
+	struct ublk_batch_fetch_cmd *entry;
+	bool listed = false;
+
+	spin_lock(&ubq->evts_lock);
+	list_for_each_entry(entry, fcmd_list, node) {
+		if (entry == fcmd) {
+			listed = true;
+			break;
+		}
+	}
+	spin_unlock(&ubq->evts_lock);
+	return listed;
+}
+
 static void ublk_batch_cancel_queue(struct ublk_queue *ubq)
 {
 	struct ublk_batch_fetch_cmd *fcmd;
@@ -3834,8 +3853,20 @@ static void ublk_batch_cancel_queue(struct ublk_queue *ubq)
 	spin_unlock(&ubq->evts_lock);
 
 	while (!list_empty(&fcmd_list)) {
+		u32 delay_us;
+
 		fcmd = list_first_entry(&fcmd_list,
 				struct ublk_batch_fetch_cmd, node);
+		delay_us = ublk_delay_us(ubq->dev, batch_cancel_walk);
+		if (delay_us) {
+			msleep(delay_us / USEC_PER_MSEC);
+			/* claimed means freed: report it instead of reading it */
+			if (!ublk_batch_fcmd_listed(ubq, &fcmd_list, fcmd)) {
+				pr_info("ublk%d: batch cancel walk: fetch command claimed by another path\n",
+					ubq->dev->dev_info.dev_id);
+				continue;
+			}
+		}
 		ublk_batch_cancel_cmd(ubq, fcmd, IO_URING_F_UNLOCKED);
 	}
 }
@@ -5982,6 +6013,8 @@ static void ublk_debugfs_delay_points(struct ublk_device *ub)
 				 ub->debugfs_dir);
 	ublk_debugfs_delay_point(&ub->delay.cancel_fn, "delay_cancel_fn",
 				 ub->debugfs_dir);
+	ublk_debugfs_delay_point(&ub->delay.batch_cancel_walk,
+				 "delay_batch_cancel_walk", ub->debugfs_dir);
 }
 #else
 static inline void ublk_debugfs_delay_points(struct ublk_device *ub) { }
