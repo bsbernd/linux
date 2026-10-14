@@ -407,6 +407,7 @@ struct ublk_delay_points {
 	struct ublk_delay_point	cancel_check;
 	struct ublk_delay_point	cancel_cmd_done;
 	struct ublk_delay_point	dispatch;
+	struct ublk_delay_point	prep_cancel;
 };
 
 static u32 ublk_delay_point_us(struct ublk_delay_point *point)
@@ -2427,12 +2428,18 @@ static inline blk_status_t __ublk_queue_rq_common(struct ublk_queue *ubq,
 						   bool *should_queue)
 {
 	blk_status_t res;
+	u32 delay_us;
 
 	res = ublk_prep_req(ubq, rq, false);
 	if (res != BLK_STS_OK) {
 		*should_queue = false;
 		return res;
 	}
+
+	/* emulates an interrupt right after ublk_prep_req() */
+	delay_us = ublk_delay_us(ubq->dev, prep_cancel);
+	if (delay_us)
+		mdelay(delay_us / USEC_PER_MSEC);
 
 	/*
 	 * ->canceling has to be handled after ->force_abort and ->fail_io
@@ -4946,6 +4953,8 @@ static void ublk_debugfs_delay_points(struct ublk_device *ub)
 	ublk_debugfs_delay_point(&ub->delay.cancel_cmd_done,
 				 "delay_cancel_cmd_done", ub->debugfs_dir);
 	ublk_debugfs_delay_point(&ub->delay.dispatch, "delay_dispatch",
+				 ub->debugfs_dir);
+	ublk_debugfs_delay_point(&ub->delay.prep_cancel, "delay_prep_cancel",
 				 ub->debugfs_dir);
 }
 #else
