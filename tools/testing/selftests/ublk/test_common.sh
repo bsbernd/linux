@@ -629,6 +629,43 @@ _ublk_wait_pid_gone() {
 	return 1
 }
 
+# Usage: _ublk_wait_dev_state <dev_id> <state> <deadline>
+_ublk_wait_dev_state() {
+	local secs=0
+
+	while [ "$secs" -lt "$3" ]; do
+		if [ "$(_get_ublk_dev_state "$1")" = "$2" ]; then
+			return 0
+		fi
+		sleep 1
+		secs=$((secs + 1))
+	done
+	return 1
+}
+
+# inflight counts started requests only
+# Usage: _ublk_wait_no_inflight <dev_id> <deadline>
+_ublk_wait_no_inflight() {
+	local reads
+	local writes
+	local secs=0
+
+	while [ "$secs" -lt "$2" ]; do
+		read -r reads writes < /sys/block/ublkb"$1"/inflight
+		if [ "$reads" -eq 0 ] && [ "$writes" -eq 0 ]; then
+			return 0
+		fi
+		sleep 1
+		secs=$((secs + 1))
+	done
+	return 1
+}
+
+# a read: closing a device opened for writing makes udev probe it again
+_ublk_read_one_block() {
+	dd if=/dev/ublkb"$1" of=/dev/null iflag=direct bs=4k count=1
+}
+
 UBLK_PROG=$(_ublk_test_top_dir)/kublk
 UBLK_TEST_QUIET=1
 UBLK_TEST_SHOW_RESULT=1

@@ -79,6 +79,7 @@ TEST_PROGS += test_teardown_debugfs_record.sh
 TEST_PROGS += test_teardown_kill_recover.sh
 TEST_PROGS += test_teardown_cancel_race.sh
 TEST_PROGS += test_teardown_cancel_fn_null_cmd.sh
+TEST_PROGS += test_teardown_quiesce_tw_pending.sh
 
 TEST_FILES := settings
 TEST_FILES += test_common.sh
