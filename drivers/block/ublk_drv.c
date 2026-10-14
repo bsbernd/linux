@@ -571,6 +571,7 @@ struct ublk_delay_points {
 	struct ublk_delay_point	batch_cancel_walk;
 	struct ublk_delay_point	mark_cancelable;
 	struct ublk_delay_point	sub_req_ref;
+	struct ublk_delay_point	register_io_buf;
 };
 
 static u32 ublk_delay_point_us(struct ublk_delay_point *point)
@@ -4451,6 +4452,15 @@ static int ublk_register_io_buf(struct io_uring_cmd *cmd,
 	return 0;
 }
 
+/* emulates a preemption right after the buffer went into the ring's table */
+static void ublk_delay_register_io_buf(struct ublk_device *ub)
+{
+	u32 delay_us = ublk_delay_us(ub, register_io_buf);
+
+	if (delay_us)
+		msleep(delay_us / USEC_PER_MSEC);
+}
+
 static int
 ublk_daemon_register_io_buf(struct io_uring_cmd *cmd,
 			    struct ublk_device *ub,
@@ -4484,6 +4494,7 @@ ublk_daemon_register_io_buf(struct io_uring_cmd *cmd,
 
 	ret = io_buffer_register_request(cmd, req, ublk_io_release, index,
 					 issue_flags);
+	ublk_delay_register_io_buf(ub);
 	/* gives the count back the way an unregister would */
 	if (ret)
 		ublk_io_release(req);
@@ -6039,6 +6050,8 @@ static void ublk_debugfs_delay_points(struct ublk_device *ub)
 				 "delay_mark_cancelable", ub->debugfs_dir);
 	ublk_debugfs_delay_point(&ub->delay.sub_req_ref,
 				 "delay_sub_req_ref", ub->debugfs_dir);
+	ublk_debugfs_delay_point(&ub->delay.register_io_buf,
+				 "delay_register_io_buf", ub->debugfs_dir);
 }
 #else
 static inline void ublk_debugfs_delay_points(struct ublk_device *ub) { }
