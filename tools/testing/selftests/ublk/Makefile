@@ -118,6 +118,7 @@ TEST_PROGS += test_teardown_quiesce_recover_race.sh
 TEST_PROGS += test_teardown_quiesce_quiesced.sh
 TEST_PROGS += test_teardown_fetch_task_ref.sh
 TEST_PROGS += test_teardown_batch_cancel_walk.sh
+TEST_PROGS += test_teardown_quiesce_mark_cancelable.sh
 
 TEST_FILES := settings
 TEST_FILES += test_common.sh
