@@ -2410,7 +2410,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--nthreads threads] [--per_io_tasks]\n");
 	printf("\t[--refetch_on_signal] SIGUSR1 stops reaping, SIGUSR2 sends FETCH_REQ on tag 0\n");
 	printf("\t[--refetch_unready] with --refetch_on_signal: tags 0 and 1 unfetched, no reaping after SIGUSR2\n");
-	printf("\t[--park_on_signal] SIGUSR1 stops reaping, SIGUSR2 resumes it\n");
+	printf("\t[--park_on_signal] SIGUSR1 stops reaping, SIGUSR2 resumes it; also with --batch\n");
 	printf("\t[--integrity_capable] [--integrity_reftag] [--metadata_size SIZE] "
 		 "[--pi_offset OFFSET] [--csum_type ip|t10dif|nvme] [--tag_size SIZE]\n");
 	printf("\t[--batch|-b] [--rotate_auto_buf] [--no_auto_part_scan]\n");
@@ -2736,7 +2736,7 @@ int main(int argc, char *argv[])
 	/* the FETCH_REQ goes to queue 0 from the one IO thread there is */
 	if (ctx.refetch_on_signal &&
 	    (ctx.nr_hw_queues != 1 || ctx.nthreads > 1 ||
-	     (ctx.flags & UBLK_F_BATCH_IO))) {
+	     ((ctx.flags & UBLK_F_BATCH_IO) && !ctx.park_on_signal))) {
 		ublk_err("refetch_on_signal needs one queue, one thread, no batch\n");
 		return -EINVAL;
 	}
