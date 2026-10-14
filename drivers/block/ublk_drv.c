@@ -567,6 +567,7 @@ struct ublk_delay_points {
 	struct ublk_delay_point	dispatch;
 	struct ublk_delay_point	prep_cancel;
 	struct ublk_delay_point	ready_wait_late;
+	struct ublk_delay_point	cancel_fn;
 };
 
 static u32 ublk_delay_point_us(struct ublk_delay_point *point)
@@ -3846,6 +3847,7 @@ static void ublk_uring_cmd_cancel_fn(struct io_uring_cmd *cmd,
 	struct ublk_queue *ubq = pdu->ubq;
 	struct task_struct *task;
 	struct ublk_io *io;
+	u32 delay_us;
 
 	if (WARN_ON_ONCE(!ubq))
 		return;
@@ -3861,6 +3863,11 @@ static void ublk_uring_cmd_cancel_fn(struct io_uring_cmd *cmd,
 	ublk_td_count(ubq->dev, cancel_fn);
 
 	ublk_start_cancel(ubq->dev);
+
+	/* emulates the ring's exit work being preempted before the tag */
+	delay_us = ublk_delay_us(ubq->dev, cancel_fn);
+	if (delay_us)
+		msleep(delay_us / USEC_PER_MSEC);
 
 	ublk_td_evt(ubq, io, UBLK_TE_CANCEL_FN,
 		    !io->cmd ? 0 : (io->cmd == cmd ? 1 : 2));
@@ -5945,6 +5952,8 @@ static void ublk_debugfs_delay_points(struct ublk_device *ub)
 	ublk_debugfs_delay_point(&ub->delay.prep_cancel, "delay_prep_cancel",
 				 ub->debugfs_dir);
 	ublk_debugfs_delay_point(&ub->delay.ready_wait_late, "ready_wait_late",
+				 ub->debugfs_dir);
+	ublk_debugfs_delay_point(&ub->delay.cancel_fn, "delay_cancel_fn",
 				 ub->debugfs_dir);
 }
 #else
