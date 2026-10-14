@@ -407,6 +407,7 @@ struct ublk_delay_point {
 
 struct ublk_delay_points {
 	struct ublk_delay_point	fill_io_cmd;
+	struct ublk_delay_point	commit_recheck;
 	struct ublk_delay_point	cancel_dev;
 	struct ublk_delay_point	cancel_check;
 	struct ublk_delay_point	cancel_cmd_done;
@@ -4287,6 +4288,10 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 		ret = ublk_validate_io_buf(ub, cmd, &auto_buf);
 		if (ret)
 			goto out;
+		/* emulates a preemption between the two OWNED_BY_SRV tests */
+		delay_us = ublk_delay_us(ub, commit_recheck);
+		if (delay_us)
+			msleep(delay_us / USEC_PER_MSEC);
 		ublk_io_lock(io);
 		if (!(io->flags & UBLK_IO_FLAG_OWNED_BY_SRV)) {
 			ret = ublk_refused_cmd_res(ubq, io);
@@ -5430,6 +5435,8 @@ static void ublk_debugfs_delay_points(struct ublk_device *ub)
 {
 	ublk_debugfs_delay_point(&ub->delay.fill_io_cmd, "delay_fill_io_cmd",
 				 ub->debugfs_dir);
+	ublk_debugfs_delay_point(&ub->delay.commit_recheck,
+				 "delay_commit_recheck", ub->debugfs_dir);
 	ublk_debugfs_delay_point(&ub->delay.cancel_dev, "delay_cancel_dev",
 				 ub->debugfs_dir);
 	ublk_debugfs_delay_point(&ub->delay.cancel_check, "delay_cancel_check",
