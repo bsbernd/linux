@@ -121,6 +121,7 @@ TEST_PROGS += test_teardown_batch_cancel_walk.sh
 TEST_PROGS += test_teardown_quiesce_mark_cancelable.sh
 TEST_PROGS += test_teardown_stop_fetch_mark_cancelable.sh
 TEST_PROGS += test_teardown_ready_count_cancel_window.sh
+TEST_PROGS += test_teardown_stop_autobuf_release.sh
 
 TEST_FILES := settings
 TEST_FILES += test_common.sh

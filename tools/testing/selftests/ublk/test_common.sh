@@ -1244,6 +1244,19 @@ _ublk_nr_io_ready() {
 	}' "${DEBUGFS_ROOT}/$1/dev_state"
 }
 
+# Echo the value after <name> on the line of a started tag, empty if the
+# request of the tag is not started.
+# Usage: _ublk_started_tag_value <dev_id> <tag> <name>
+_ublk_started_tag_value() {
+	awk -v want="$2" -v name="$3" '
+		$1 == "tag" && $2 == want && index($0, "REQ_STARTED") {
+			for (field = 3; field < NF; field++)
+				if ($field == name)
+					print $(field + 1)
+		}
+	' "${DEBUGFS_ROOT}/$1/tags"
+}
+
 UBLK_PROG=$(_ublk_test_top_dir)/kublk
 UBLK_TEST_QUIET=1
 UBLK_TEST_SHOW_RESULT=1
