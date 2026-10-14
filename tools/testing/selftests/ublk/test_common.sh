@@ -546,7 +546,10 @@ __ublk_kill_daemon()
 
 	for ((j=0;j<100*UBLK_WAIT_SCALE;j++)); do
 		[ "$state" == "$exp_state" ] && break
-		kill -9 "$daemon_pid" > /dev/null 2>&1
+		# a reaped daemon reads back as pid -1, and kill -9 -1 kills everything
+		if [[ "$daemon_pid" =~ ^[1-9][0-9]*$ ]]; then
+			kill -9 "$daemon_pid" > /dev/null 2>&1
+		fi
 		sleep 1
 		state=$(_get_ublk_dev_state "${dev_id}")
 	done
