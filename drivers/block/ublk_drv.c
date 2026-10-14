@@ -4536,9 +4536,12 @@ static int __ublk_fetch(struct io_uring_cmd *cmd, struct ublk_device *ub,
 	return 0;
 }
 
-static int ublk_fetch(struct io_uring_cmd *cmd, struct ublk_device *ub,
-		      struct ublk_io *io, __u64 buf_addr, u16 q_id)
+static int ublk_fetch(struct io_uring_cmd *cmd, struct ublk_queue *ubq,
+		      struct ublk_io *io, __u64 buf_addr, u16 tag,
+		      unsigned int issue_flags)
 {
+	struct ublk_device *ub = ubq->dev;
+	u16 q_id = ubq->q_id;
 	struct ublk_auto_buf_reg auto_buf;
 	int ret;
 
@@ -4554,6 +4557,9 @@ static int ublk_fetch(struct io_uring_cmd *cmd, struct ublk_device *ub,
 	if (!ret) {
 		ublk_io_lock(io);
 		ret = __ublk_fetch(cmd, ub, io, q_id);
+		/* ublk_cancel_cmd() may take the command once io->lock drops */
+		if (!ret)
+			ublk_prep_cancel(cmd, issue_flags, ubq, tag);
 		ublk_io_unlock(io);
 	}
 	if (!ret) {
@@ -4628,6 +4634,7 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 	u32 delay_us;
 	int ret;
 	bool compl;
+	bool canceling;
 
 	WARN_ON_ONCE(issue_flags & IO_URING_F_UNLOCKED);
 
@@ -4660,13 +4667,12 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 		ret = ublk_check_fetch_buf(ub, addr);
 		if (ret)
 			goto out;
-		ret = ublk_fetch(cmd, ub, io, addr, q_id);
+		ret = ublk_fetch(cmd, ubq, io, addr, tag, issue_flags);
 		if (ret)
 			goto out;
 
 		ublk_td_park(ubq, io, _IOC_NR(cmd_op));
 		ublk_delay_mark_cancelable(ub);
-		ublk_prep_cancel(cmd, issue_flags, ubq, tag);
 		return -EIOCBQUEUED;
 	}
 
@@ -4776,13 +4782,22 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 	delay_us = ublk_delay_us(ub, cancel_check);
 	if (delay_us)
 		msleep(delay_us / USEC_PER_MSEC);
-	ret = ublk_check_canceling(ubq, io);
-	if (unlikely(ret))
-		return ret;
+	/*
+	 * ublk_cancel_cmd() takes the command under io->lock, so it finds the
+	 * command marked or this test finds ->canceling set. A command a queued
+	 * task work holds is marked either way: that task work completes it.
+	 */
+	ublk_io_lock(io);
+	canceling = READ_ONCE(ubq->canceling) &&
+		    !(io->flags & UBLK_IO_FLAG_CMD_TW_PENDING);
+	if (likely(!canceling))
+		ublk_prep_cancel(cmd, issue_flags, ubq, tag);
+	ublk_io_unlock(io);
+	if (unlikely(canceling))
+		return ublk_check_canceling(ubq, io);
 
 	ublk_td_park(ubq, io, _IOC_NR(cmd_op));
 	ublk_delay_mark_cancelable(ub);
-	ublk_prep_cancel(cmd, issue_flags, ubq, tag);
 	return -EIOCBQUEUED;
 
  out:
