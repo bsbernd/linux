@@ -173,6 +173,8 @@ _ublk_wait_tag_flag_gone() {
 UBLK_DMESG_BAD='BUG:|WARNING:|blocked for more than|circular locking'
 UBLK_DMESG_BAD+='|refcount_t:|KCSAN:|array-index-out-of-bounds'
 UBLK_DMESG_BAD+='|suspicious rcu_dereference'
+# names the tag teardown failed to dispose of; a pr_warn, so no WARNING:
+UBLK_DMESG_BAD+='|ublk_warn_started_rq'
 
 _check_dmesg() {
 	local from
