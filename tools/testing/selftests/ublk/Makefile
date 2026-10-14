@@ -93,6 +93,7 @@ TEST_PROGS += test_teardown_batch_fifo.sh
 TEST_PROGS += test_teardown_quiesce_batch.sh
 TEST_PROGS += test_teardown_srv_owned.sh
 TEST_PROGS += test_teardown_stop_batch_fetch.sh
+TEST_PROGS += test_teardown_stop_commit_held.sh
 
 TEST_FILES := settings
 TEST_FILES += test_common.sh
