@@ -1179,6 +1179,20 @@ _ublk_wait_commit_refused_res() {
 	return 1
 }
 
+# Usage: _ublk_wait_live <dev_id> <deadline>
+_ublk_wait_live() {
+	local secs=0
+
+	while [ "$secs" -lt "$2" ]; do
+		if grep -q "^state: LIVE$" "${DEBUGFS_ROOT}/$1/dev_state"; then
+			return 0
+		fi
+		sleep 1
+		secs=$((secs + 1))
+	done
+	return 1
+}
+
 UBLK_PROG=$(_ublk_test_top_dir)/kublk
 UBLK_TEST_QUIET=1
 UBLK_TEST_SHOW_RESULT=1
