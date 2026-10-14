@@ -892,23 +892,28 @@ static void ublk_submit_fetch_commands(struct ublk_thread *t, bool deferred)
  * ring's exit work cancels them; a thread exit alone leaves them parked. The
  * cancel runs asynchronously, so thread 1 fetches only on SIGUSR2, which every
  * thread blocks until thread 1 takes it.
+ *
+ * --exit_on_signal: thread 0 closes its ring only on SIGUSR1, so a test can
+ * arm a delay point of the ring's exit work first.
  */
-static void ublk_block_fetch_signal(void)
+static void ublk_block_fetch_signal(const struct ublk_dev *dev)
 {
 	sigset_t set;
 
 	sigemptyset(&set);
 	sigaddset(&set, SIGUSR2);
+	if (dev->exit_on_signal)
+		sigaddset(&set, SIGUSR1);
 	pthread_sigmask(SIG_BLOCK, &set, NULL);
 }
 
-static void ublk_wait_fetch_signal(void)
+static void ublk_wait_signal(int signo)
 {
 	sigset_t set;
 	int sig;
 
 	sigemptyset(&set);
-	sigaddset(&set, SIGUSR2);
+	sigaddset(&set, signo);
 	sigwait(&set, &sig);
 }
 
@@ -1472,7 +1477,7 @@ static __attribute__((noinline)) int __ublk_io_handler_fn(struct ublk_thread_inf
 			gettid(), dev_id, t.idx);
 
 	if (t.dev->exit_after_fetch && t.idx == 1)
-		ublk_wait_fetch_signal();
+		ublk_wait_signal(SIGUSR2);
 	if (t.dev->takeover_after_exit && t.idx == 1)
 		ublk_take_over_thread0_tags(&t);
 
@@ -1486,6 +1491,8 @@ static __attribute__((noinline)) int __ublk_io_handler_fn(struct ublk_thread_inf
 
 	if (t.dev->exit_after_fetch && t.idx == 0) {
 		io_uring_submit(&t.ring);
+		if (t.dev->exit_on_signal)
+			ublk_wait_signal(SIGUSR1);
 		/* unmaps the rings too: a mapping keeps the ring from going */
 		io_uring_queue_exit(&t.ring);
 		return 0;
@@ -1945,7 +1952,7 @@ static int ublk_start_daemon(const struct dev_ctx *ctx, struct ublk_dev *dev)
 
 	/* the IO threads inherit the mask */
 	if (dev->exit_after_fetch)
-		ublk_block_fetch_signal();
+		ublk_block_fetch_signal(dev);
 
 	for (i = 0; i < dev->nthreads; i++) {
 		tinfo[i].dev = dev;
@@ -2243,6 +2250,7 @@ static int __cmd_dev_add(const struct dev_ctx *ctx)
 	dev->per_io_tasks = ctx->per_io_tasks;
 	dev->exit_after_fetch = ctx->exit_after_fetch;
 	dev->takeover_after_exit = ctx->takeover_after_exit;
+	dev->exit_on_signal = ctx->exit_on_signal;
 	dev->bad_buf_index = ctx->bad_buf_index;
 	dev->bad_fetch_buf = ctx->bad_fetch_buf;
 	dev->hold_io = ctx->hold_io;
@@ -2652,6 +2660,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--nthreads threads] [--per_io_tasks]\n");
 	printf("\t[--exit_after_fetch] with --per_io_tasks --nthreads 2: thread 0 closes its ring after its FETCH_REQs, thread 1 fetches on SIGUSR2\n");
 	printf("\t[--takeover_after_exit] with --exit_after_fetch: thread 1 fetches the tags of thread 0 before its own\n");
+	printf("\t[--exit_on_signal] with --exit_after_fetch: thread 0 closes its ring only on SIGUSR1\n");
 	printf("\t[--refetch_on_signal] SIGUSR1 stops reaping, SIGUSR2 sends FETCH_REQ on tag 0\n");
 	printf("\t[--refetch_unready] with --refetch_on_signal: tags 0 and 1 unfetched, no reaping after SIGUSR2\n");
 	printf("\t[--park_on_signal] SIGUSR1 stops reaping, SIGUSR2 resumes it; also with --batch\n");
@@ -2739,6 +2748,7 @@ int main(int argc, char *argv[])
 		{ "per_io_tasks",	0,	NULL,  0 },
 		{ "exit_after_fetch",	0,	NULL,  0 },
 		{ "takeover_after_exit", 0,	NULL,  0 },
+		{ "exit_on_signal",	0,	NULL,  0 },
 		{ "no_ublk_fixed_fd",	0,	NULL,  0 },
 		{ "integrity_capable",	0,	NULL,  0 },
 		{ "integrity_reftag",	0,	NULL,  0 },
@@ -2886,6 +2896,8 @@ int main(int argc, char *argv[])
 				ctx.exit_after_fetch = 1;
 			if (!strcmp(longopts[option_idx].name, "takeover_after_exit"))
 				ctx.takeover_after_exit = 1;
+			if (!strcmp(longopts[option_idx].name, "exit_on_signal"))
+				ctx.exit_on_signal = 1;
 			if (!strcmp(longopts[option_idx].name, "no_ublk_fixed_fd"))
 				ctx.no_ublk_fixed_fd = 1;
 			if (!strcmp(longopts[option_idx].name, "integrity_capable"))
@@ -3019,6 +3031,11 @@ int main(int argc, char *argv[])
 
 	if (ctx.takeover_after_exit && !ctx.exit_after_fetch) {
 		ublk_err("takeover_after_exit needs exit_after_fetch\n");
+		return -EINVAL;
+	}
+
+	if (ctx.exit_on_signal && !ctx.exit_after_fetch) {
+		ublk_err("exit_on_signal needs exit_after_fetch\n");
 		return -EINVAL;
 	}
 
