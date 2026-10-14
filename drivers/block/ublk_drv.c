@@ -435,6 +435,8 @@ struct ublk_device {
 	bool 			unprivileged_daemons;
 	struct mutex cancel_mutex;
 	bool canceling;
+	/* QUIESCE_DEV cancel walks the release work waits for */
+	atomic_t		quiesce_walks;
 	pid_t 	ublksrv_tgid;
 	struct delayed_work	exit_work;
 	struct work_struct	partition_scan_work;
@@ -2744,6 +2746,9 @@ static void ublk_ch_release_work_fn(struct work_struct *work)
 unlock:
 	mutex_unlock(&ub->mutex);
 	ublk_put_disk(disk);
+
+	/* a QUIESCE_DEV walk must not reach the next server's commands */
+	wait_var_event(&ub->quiesce_walks, !atomic_read(&ub->quiesce_walks));
 
 	/* all uring_cmd has been done now, reset device & ubq */
 	ublk_reset_ch_dev(ub);
@@ -5775,6 +5780,7 @@ static int ublk_ctrl_quiesce_dev(struct ublk_device *ub,
 	/* zero means wait forever */
 	u64 timeout_ms = header->data[0];
 	struct gendisk *disk;
+	bool walk = false;
 	int ret = -ENODEV;
 
 	if (!(ub->dev_info.flags & UBLK_F_QUIESCE))
@@ -5802,6 +5808,11 @@ static int ublk_ctrl_quiesce_dev(struct ublk_device *ub,
 	if (!timeout_ms)
 		timeout_ms = UINT_MAX;
 	ret = ublk_wait_for_idle_io(ub, timeout_ms);
+	/* counted with LIVE seen: no next server opens before the walk ends */
+	if (!ret) {
+		walk = true;
+		atomic_inc(&ub->quiesce_walks);
+	}
 
 put_disk:
 	ublk_put_disk(disk);
@@ -5809,8 +5820,11 @@ unlock:
 	mutex_unlock(&ub->mutex);
 
 	/* Cancel pending uring_cmd */
-	if (!ret)
+	if (walk) {
 		ublk_cancel_dev(ub);
+		if (atomic_dec_and_test(&ub->quiesce_walks))
+			wake_up_var(&ub->quiesce_walks);
+	}
 	return ret;
 }
 
