@@ -5058,6 +5058,24 @@ static void ublk_debugfs_put_io_flags(struct seq_file *sf, unsigned int flags)
 		seq_puts(sf, "CANCELED ");
 }
 
+static void ublk_debugfs_put_fetch_cmds(struct seq_file *sf,
+					struct ublk_queue *ubq)
+{
+	struct ublk_batch_fetch_cmd *fcmd;
+	unsigned int nr_fcmds = 0;
+	bool active;
+
+	/* seq_printf() may sleep, so count and print after */
+	spin_lock(&ubq->evts_lock);
+	list_for_each_entry(fcmd, &ubq->fcmd_head, node)
+		nr_fcmds++;
+	active = READ_ONCE(ubq->active_fcmd) != NULL;
+	spin_unlock(&ubq->evts_lock);
+
+	seq_printf(sf, "queue %u: fetch_cmds %u active %d\n", ubq->q_id,
+		   nr_fcmds, active);
+}
+
 static int ublk_debugfs_dev_state_show(struct seq_file *sf, void *priv)
 {
 	struct ublk_device *ub = sf->private;
@@ -5090,6 +5108,8 @@ static int ublk_debugfs_dev_state_show(struct seq_file *sf, void *priv)
 		seq_printf(sf, "queue %u: depth %u canceling %d force_abort %d fail_io %d nr_io_ready %u\n",
 			   ubq->q_id, ubq->q_depth, ubq->canceling,
 			   ubq->force_abort, ubq->fail_io, ubq->nr_io_ready);
+		if (ublk_support_batch_io(ubq))
+			ublk_debugfs_put_fetch_cmds(sf, ubq);
 	}
 	return 0;
 }
