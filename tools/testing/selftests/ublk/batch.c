@@ -360,7 +360,8 @@ static unsigned short ublk_compl_batch_fetch(struct ublk_thread *t,
 		if (tag >= q->q_depth)
 			ublk_err("%s: bad tag %u\n", __func__, tag);
 
-		if (q->tgt_ops->queue_io)
+		if (!ublk_hold_fetched_io(t, &q->ios[tag]) &&
+		    q->tgt_ops->queue_io)
 			q->tgt_ops->queue_io(t, q, tag);
 	}
 	t->fetch[buf_idx].fetch_buf_off = end;
@@ -431,7 +432,9 @@ static void ublk_batch_compl_commit_cmd(struct ublk_thread *t,
 	else if (op == _IOC_NR(UBLK_U_IO_COMMIT_IO_CMDS)) {
 		int nr_elem = user_data_to_tgt_data(cqe->user_data);
 
-		ublk_assert(cqe->res == t->commit_buf_elem_size * nr_elem);
+		/* negative: the kernel refused a tag, e.g. one teardown took */
+		ublk_assert(cqe->res < 0 ||
+			    cqe->res == t->commit_buf_elem_size * nr_elem);
 	} else
 		ublk_assert(0);
 

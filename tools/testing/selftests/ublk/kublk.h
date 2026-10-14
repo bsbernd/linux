@@ -673,6 +673,9 @@ static inline void ublk_queued_tgt_io(struct ublk_thread *t, struct ublk_queue *
 /* --hold_zc_buf: true for the one request that commits with its buffer registered */
 bool ublk_should_hold_zc_buf(unsigned tag);
 
+/* --hold_io_on_signal: true if the fetched request is held until SIGUSR2 */
+bool ublk_hold_fetched_io(struct ublk_thread *t, struct ublk_io *io);
+
 /* shared memory zero-copy support */
 #define UBLK_BUF_MAX		256
 

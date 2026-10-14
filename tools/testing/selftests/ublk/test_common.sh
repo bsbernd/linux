@@ -1076,6 +1076,58 @@ _ublk_wait_tags_show() {
 	return 1
 }
 
+# Echo the flag names of a tag whose request is started. They print on the
+# line below the tag line; the tag line may name the tag state, not a flag.
+# Usage: _ublk_started_tag_flags <dev_id> <tag>
+_ublk_started_tag_flags() {
+	awk -v want="$2" '
+		$1 == "tag" { started = ($2 == want && index($0, "REQ_STARTED")); next }
+		started && /\(0x[0-9a-f]+\)$/ { print }
+		{ started = 0 }
+	' "${DEBUGFS_ROOT}/$1/tags"
+}
+
+# STOP_DEV took the tag: still started and registered, no longer the server's.
+# Polled in tenths: the commit has to land within the 5 s of
+# ublk_warn_started_rqs().
+# Usage: _ublk_wait_tag_taken <dev_id> <tag> <deadline>
+_ublk_wait_tag_taken() {
+	local tenths=0
+	local flags
+
+	while [ "$tenths" -lt $(($3 * 10)) ]; do
+		flags=$(_ublk_started_tag_flags "$1" "$2")
+		if [[ "$flags" == *AUTO_BUF_REG* && "$flags" != *OWNED_BY_SRV* ]]; then
+			return 0
+		fi
+		sleep 0.1
+		tenths=$((tenths + 1))
+	done
+	return 1
+}
+
+# Echo the tag of the held read: started, owned by the server, buffer
+# registered.
+# Usage: _ublk_wait_held_tag <dev_id> <depth> <deadline>
+_ublk_wait_held_tag() {
+	local tenths=0
+	local flags
+	local tag
+
+	while [ "$tenths" -lt $(($3 * 10)) ]; do
+		for ((tag = 0; tag < $2; tag++)); do
+			flags=$(_ublk_started_tag_flags "$1" "$tag")
+			if [[ "$flags" == *OWNED_BY_SRV* && "$flags" == *AUTO_BUF_REG* ]]; then
+				echo "$tag"
+				return 0
+			fi
+		done
+		sleep 0.1
+		tenths=$((tenths + 1))
+	done
+	return 1
+}
+
 UBLK_PROG=$(_ublk_test_top_dir)/kublk
 UBLK_TEST_QUIET=1
 UBLK_TEST_SHOW_RESULT=1

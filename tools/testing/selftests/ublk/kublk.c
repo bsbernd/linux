@@ -967,6 +967,17 @@ static void ublk_setup_usr_signals(void (*handler)(int))
 	pthread_sigmask(SIG_BLOCK, &set, NULL);
 }
 
+bool ublk_hold_fetched_io(struct ublk_thread *t, struct ublk_io *io)
+{
+	if (!ublk_hold_io.armed || ublk_hold_io.release)
+		return false;
+
+	/* counted, so an ABORT on the other tags does not end the thread */
+	io->flags |= UBLKS_IO_HELD;
+	t->io_inflight++;
+	return true;
+}
+
 static void ublk_release_held_io(struct ublk_thread *t)
 {
 	struct ublk_queue *q = &t->dev->q[0];
@@ -1010,11 +1021,8 @@ static void ublk_handle_uring_cmd(struct ublk_thread *t,
 		 * --hold_io: never complete what we fetched, so the tag stays
 		 * UBLK_IO_FLAG_OWNED_BY_SRV and teardown has to deal with it
 		 */
-		if (ublk_hold_io.armed && !ublk_hold_io.release) {
-			/* counted, so an ABORT on the other tags does not end the thread */
-			io->flags |= UBLKS_IO_HELD;
-			t->io_inflight++;
-		} else if (q->tgt_ops->queue_io && !t->dev->hold_io)
+		if (!ublk_hold_fetched_io(t, io) &&
+		    q->tgt_ops->queue_io && !t->dev->hold_io)
 			q->tgt_ops->queue_io(t, q, tag);
 	} else if (cqe->res == UBLK_IO_RES_NEED_GET_DATA) {
 		io->flags |= UBLKS_IO_NEED_GET_DATA | UBLKS_IO_FREE;
@@ -3066,9 +3074,8 @@ int main(int argc, char *argv[])
 
 	/* the held requests are released on queue 0 by the one IO thread */
 	if (ctx.hold_io_on_signal &&
-	    (ctx.nr_hw_queues != 1 || ctx.nthreads > 1 ||
-	     (ctx.flags & UBLK_F_BATCH_IO))) {
-		ublk_err("hold_io_on_signal needs one queue, one thread, no batch\n");
+	    (ctx.nr_hw_queues != 1 || ctx.nthreads > 1)) {
+		ublk_err("hold_io_on_signal needs one queue, one thread\n");
 		return -EINVAL;
 	}
 
