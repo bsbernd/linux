@@ -569,6 +569,7 @@ struct ublk_delay_points {
 	struct ublk_delay_point	ready_wait_late;
 	struct ublk_delay_point	cancel_fn;
 	struct ublk_delay_point	batch_cancel_walk;
+	struct ublk_delay_point	mark_cancelable;
 };
 
 static u32 ublk_delay_point_us(struct ublk_delay_point *point)
@@ -4367,6 +4368,15 @@ static int ublk_refused_cmd_res(struct ublk_queue *ubq, struct ublk_io *io)
 	return -EBUSY;
 }
 
+/* emulates a preemption next to the cancelable mark of a parked command */
+static void ublk_delay_mark_cancelable(struct ublk_device *ub)
+{
+	u32 delay_us = ublk_delay_us(ub, mark_cancelable);
+
+	if (delay_us)
+		msleep(delay_us / USEC_PER_MSEC);
+}
+
 static inline void ublk_prep_cancel(struct io_uring_cmd *cmd,
 				    unsigned int issue_flags,
 				    struct ublk_queue *ubq, u16 tag)
@@ -4655,6 +4665,7 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 			goto out;
 
 		ublk_td_park(ubq, io, _IOC_NR(cmd_op));
+		ublk_delay_mark_cancelable(ub);
 		ublk_prep_cancel(cmd, issue_flags, ubq, tag);
 		return -EIOCBQUEUED;
 	}
@@ -4770,6 +4781,7 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 		return ret;
 
 	ublk_td_park(ubq, io, _IOC_NR(cmd_op));
+	ublk_delay_mark_cancelable(ub);
 	ublk_prep_cancel(cmd, issue_flags, ubq, tag);
 	return -EIOCBQUEUED;
 
@@ -5999,6 +6011,8 @@ static void ublk_debugfs_delay_points(struct ublk_device *ub)
 				 ub->debugfs_dir);
 	ublk_debugfs_delay_point(&ub->delay.batch_cancel_walk,
 				 "delay_batch_cancel_walk", ub->debugfs_dir);
+	ublk_debugfs_delay_point(&ub->delay.mark_cancelable,
+				 "delay_mark_cancelable", ub->debugfs_dir);
 }
 #else
 static inline void ublk_debugfs_delay_points(struct ublk_device *ub) { }
