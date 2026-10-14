@@ -103,6 +103,7 @@ TEST_PROGS += test_teardown_stop_owned.sh
 TEST_PROGS += test_teardown_stop_refused_tw.sh
 TEST_PROGS += test_teardown_stop_tw_handback.sh
 TEST_PROGS += test_teardown_autobuf_refused.sh
+TEST_PROGS += test_teardown_commit_recheck_autobuf.sh
 TEST_PROGS += test_teardown_abandon_ring.sh
 TEST_PROGS += test_teardown_self_del.sh
 TEST_PROGS += test_teardown_union_split.sh
