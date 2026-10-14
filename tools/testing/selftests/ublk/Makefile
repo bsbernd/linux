@@ -84,6 +84,7 @@ TEST_PROGS += test_teardown_fetch_on_stop_autobuf.sh
 TEST_PROGS += test_teardown_quiesce_abandoned.sh
 TEST_PROGS += test_teardown_stop_owned.sh
 TEST_PROGS += test_teardown_self_del.sh
+TEST_PROGS += test_teardown_quiesce_quiesced.sh
 
 TEST_FILES := settings
 TEST_FILES += test_common.sh
