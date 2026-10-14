@@ -570,6 +570,7 @@ struct ublk_delay_points {
 	struct ublk_delay_point	cancel_fn;
 	struct ublk_delay_point	batch_cancel_walk;
 	struct ublk_delay_point	mark_cancelable;
+	struct ublk_delay_point	sub_req_ref;
 };
 
 static u32 ublk_delay_point_us(struct ublk_delay_point *point)
@@ -1653,19 +1654,27 @@ static inline void ublk_put_req_ref(struct ublk_io *io, struct request *req)
 	__ublk_complete_rq(req, io, false, NULL);
 }
 
-static inline bool ublk_sub_req_ref(struct ublk_io *io)
+static inline bool ublk_sub_req_ref(struct ublk_device *ub,
+				    struct ublk_io *io)
 {
 	unsigned sub_refs = UBLK_REFCOUNT_INIT - io->task_registered_buffers;
+	u32 delay_us = ublk_delay_us(ub, sub_req_ref);
 
+	/*
+	 * emulates a preemption between reading and clearing; no sleep, as
+	 * ublk_batch_commit_io() holds io->lock here
+	 */
+	if (delay_us)
+		mdelay(delay_us / USEC_PER_MSEC);
 	io->task_registered_buffers = 0;
 	return refcount_sub_and_test(sub_refs, &io->ref);
 }
 
-static bool ublk_need_complete_req(const struct ublk_device *ub,
+static bool ublk_need_complete_req(struct ublk_device *ub,
 				   struct ublk_io *io)
 {
 	if (ublk_dev_need_req_ref(ub))
-		return ublk_sub_req_ref(io);
+		return ublk_sub_req_ref(ub, io);
 	return true;
 }
 
@@ -6028,6 +6037,8 @@ static void ublk_debugfs_delay_points(struct ublk_device *ub)
 				 "delay_batch_cancel_walk", ub->debugfs_dir);
 	ublk_debugfs_delay_point(&ub->delay.mark_cancelable,
 				 "delay_mark_cancelable", ub->debugfs_dir);
+	ublk_debugfs_delay_point(&ub->delay.sub_req_ref,
+				 "delay_sub_req_ref", ub->debugfs_dir);
 }
 #else
 static inline void ublk_debugfs_delay_points(struct ublk_device *ub) { }
