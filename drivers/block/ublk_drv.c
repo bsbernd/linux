@@ -49,6 +49,7 @@
 #include <linux/maple_tree.h>
 #include <linux/xarray.h>
 #include <linux/debugfs.h>
+#include <linux/fault-inject.h>
 #include <linux/seq_file.h>
 #include <uapi/linux/fs.h>
 #include <uapi/linux/ublk_cmd.h>
@@ -383,6 +384,29 @@ do {									\
 #define ublk_td_closed(ub, filp)	do { } while (0)
 #endif
 
+#ifdef CONFIG_FAULT_INJECTION_DEBUG_FS
+/* tests arm it with probability 100, times 1 and delay_us to hold a race open */
+struct ublk_delay_point {
+	struct fault_attr	attr;
+	u32			delay_us;
+};
+
+struct ublk_delay_points {
+	struct ublk_delay_point	cancel_check;
+};
+
+static u32 ublk_delay_point_us(struct ublk_delay_point *point)
+{
+	if (!should_fail(&point->attr, 1))
+		return 0;
+	return READ_ONCE(point->delay_us);
+}
+
+#define ublk_delay_us(ub, point)	ublk_delay_point_us(&(ub)->delay.point)
+#else
+#define ublk_delay_us(ub, point)	({ (void)(ub); 0U; })
+#endif
+
 struct ublk_device {
 	struct gendisk		*ub_disk;
 
@@ -423,6 +447,9 @@ struct ublk_device {
 #ifdef CONFIG_DEBUG_FS
 	struct dentry		*debugfs_dir;
 	struct ublk_teardown_record teardown;
+#endif
+#ifdef CONFIG_FAULT_INJECTION_DEBUG_FS
+	struct ublk_delay_points	delay;
 #endif
 
 	struct ublk_queue       *queues[];
@@ -3528,6 +3555,7 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 	s32 result = READ_ONCE(ub_src->result);
 	u64 addr = READ_ONCE(ub_src->addr); /* unioned with zone_append_lba */
 	struct request *req;
+	u32 delay_us;
 	int ret;
 	bool compl;
 
@@ -3654,6 +3682,11 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 	default:
 		goto out;
 	}
+
+	/* emulates a preemption after the commit ended its request */
+	delay_us = ublk_delay_us(ub, cancel_check);
+	if (delay_us)
+		msleep(delay_us / USEC_PER_MSEC);
 	ublk_prep_cancel(cmd, issue_flags, ubq, tag);
 	return -EIOCBQUEUED;
 
@@ -4692,6 +4725,27 @@ static int ublk_debugfs_teardown_show(struct seq_file *sf, void *priv)
 }
 DEFINE_SHOW_ATTRIBUTE(ublk_debugfs_teardown);
 
+#ifdef CONFIG_FAULT_INJECTION_DEBUG_FS
+static void ublk_debugfs_delay_point(struct ublk_delay_point *point,
+				     const char *name, struct dentry *parent)
+{
+	struct dentry *dir;
+
+	point->attr = (struct fault_attr) FAULT_ATTR_INITIALIZER;
+	dir = fault_create_debugfs_attr(name, parent, &point->attr);
+	if (!IS_ERR(dir))
+		debugfs_create_u32("delay_us", 0600, dir, &point->delay_us);
+}
+
+static void ublk_debugfs_delay_points(struct ublk_device *ub)
+{
+	ublk_debugfs_delay_point(&ub->delay.cancel_check, "delay_cancel_check",
+				 ub->debugfs_dir);
+}
+#else
+static inline void ublk_debugfs_delay_points(struct ublk_device *ub) { }
+#endif
+
 static void ublk_debugfs_dev_files(struct ublk_device *ub)
 {
 	debugfs_create_file("dev_state", 0444, ub->debugfs_dir, ub,
@@ -4700,6 +4754,7 @@ static void ublk_debugfs_dev_files(struct ublk_device *ub)
 			    &ublk_debugfs_tags_fops);
 	debugfs_create_file("teardown", 0444, ub->debugfs_dir, ub,
 			    &ublk_debugfs_teardown_fops);
+	ublk_debugfs_delay_points(ub);
 }
 
 static void ublk_debugfs_dev_init(struct ublk_device *ub)
