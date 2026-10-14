@@ -565,6 +565,7 @@ struct ublk_delay_points {
 	struct ublk_delay_point	cancel_cmd_done;
 	struct ublk_delay_point	dispatch;
 	struct ublk_delay_point	prep_cancel;
+	struct ublk_delay_point	ready_wait_late;
 };
 
 static u32 ublk_delay_point_us(struct ublk_delay_point *point)
@@ -5936,6 +5937,8 @@ static void ublk_debugfs_delay_points(struct ublk_device *ub)
 				 ub->debugfs_dir);
 	ublk_debugfs_delay_point(&ub->delay.prep_cancel, "delay_prep_cancel",
 				 ub->debugfs_dir);
+	ublk_debugfs_delay_point(&ub->delay.ready_wait_late, "ready_wait_late",
+				 ub->debugfs_dir);
 }
 #else
 static inline void ublk_debugfs_delay_points(struct ublk_device *ub) { }
@@ -6155,6 +6158,31 @@ static bool ublk_validate_user_pid(struct ublk_device *ub, pid_t ublksrv_pid)
 }
 
 /*
+ * Emulates the io-wq worker taking this command only after get_signal()
+ * consumed both the server's SIGKILL and io-wq's exit wakeup: nothing is
+ * left pending.
+ */
+static void ublk_drop_exit_signals(struct ublk_device *ub, u32 delay_us)
+{
+	unsigned long deadline = jiffies + usecs_to_jiffies(delay_us);
+	bool group_exit = false;
+	bool notify_signal = false;
+
+	while (!(group_exit && notify_signal) &&
+	       time_before(jiffies, deadline)) {
+		msleep(10);
+		group_exit = READ_ONCE(current->signal->flags) &
+			     SIGNAL_GROUP_EXIT;
+		notify_signal = test_thread_flag(TIF_NOTIFY_SIGNAL);
+	}
+	flush_signals(current);
+	clear_notify_signal();
+	pr_info("ublk%d: ready_wait_late: group_exit %d, notify_signal %d, sigpending %d\n",
+		ub->dev_info.dev_id, group_exit, notify_signal,
+		signal_pending(current));
+}
+
+/*
  * Wait until all queues have fetched their I/O commands, and return with
  * ub->mutex held and readiness guaranteed: then every queue's ->canceling
  * is cleared. Ready may regress between wakeup and mutex_lock() (F_BATCH
@@ -6162,6 +6190,11 @@ static bool ublk_validate_user_pid(struct ublk_device *ub, pid_t ublksrv_pid)
  */
 static int ublk_wait_dev_ready_and_lock(struct ublk_device *ub)
 {
+	u32 late_us = ublk_delay_us(ub, ready_wait_late);
+
+	if (late_us)
+		ublk_drop_exit_signals(ub, late_us);
+
 	while (true) {
 		if (wait_var_event_interruptible(&ub->nr_queue_ready,
 						 ublk_dev_ready(ub)))
