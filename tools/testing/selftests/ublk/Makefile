@@ -77,6 +77,7 @@ TEST_PROGS += test_stress_09.sh
 TEST_PROGS += test_teardown_debugfs_tags.sh
 TEST_PROGS += test_teardown_debugfs_record.sh
 TEST_PROGS += test_teardown_kill_recover.sh
+TEST_PROGS += test_teardown_queue_rqs_canceled.sh
 TEST_PROGS += test_teardown_cancel_race.sh
 TEST_PROGS += test_teardown_cancel_fn_null_cmd.sh
 TEST_PROGS += test_teardown_quiesce_held_buf.sh

@@ -95,6 +95,7 @@ struct dev_ctx {
 	unsigned int	no_end_recovery:1;
 	unsigned int	auto_zc_fallback:1;
 	unsigned int	per_io_tasks:1;
+	unsigned int	exit_after_fetch:1;
 	unsigned int	refetch_on_signal:1;
 	unsigned int	refetch_unready:1;
 	unsigned int	park_on_signal:1;
@@ -298,6 +299,7 @@ struct ublk_dev {
 	unsigned bad_fetch_buf;
 	unsigned nthreads;
 	unsigned per_io_tasks;
+	unsigned exit_after_fetch;
 	unsigned hold_io;
 
 	int fds[MAX_BACK_FILES + 1];	/* fds[0] points to /dev/ublkcN */

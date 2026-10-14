@@ -902,6 +902,42 @@ _ublk_wait_disk_detached() {
 	return 1
 }
 
+# Usage: _ublk_tags_show <dev_id> <word> <tag>...
+_ublk_tags_show() {
+	local dev_id=$1
+	local word=$2
+	local tag
+
+	shift 2
+	if [ ! -f "${DEBUGFS_ROOT}/${dev_id}/tags" ]; then
+		return 1
+	fi
+	for tag in "$@"; do
+		if ! _ublk_tag_lines "$dev_id" "$tag" | grep -q "$word"; then
+			return 1
+		fi
+	done
+	return 0
+}
+
+# Usage: _ublk_wait_tags_show <dev_id> <word> <deadline> <tag>...
+_ublk_wait_tags_show() {
+	local dev_id=$1
+	local word=$2
+	local deadline=$3
+	local secs=0
+
+	shift 3
+	while [ "$secs" -lt "$deadline" ]; do
+		if _ublk_tags_show "$dev_id" "$word" "$@"; then
+			return 0
+		fi
+		sleep 1
+		secs=$((secs + 1))
+	done
+	return 1
+}
+
 UBLK_PROG=$(_ublk_test_top_dir)/kublk
 UBLK_TEST_QUIET=1
 UBLK_TEST_SHOW_RESULT=1

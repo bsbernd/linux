@@ -884,6 +884,31 @@ static void ublk_submit_fetch_commands(struct ublk_thread *t)
 	}
 }
 
+/*
+ * --exit_after_fetch: thread 0 closes its ring after its FETCH_REQs, and the
+ * ring's exit work cancels them; a thread exit alone leaves them parked. The
+ * cancel runs asynchronously, so thread 1 fetches only on SIGUSR2, which every
+ * thread blocks until thread 1 takes it.
+ */
+static void ublk_block_fetch_signal(void)
+{
+	sigset_t set;
+
+	sigemptyset(&set);
+	sigaddset(&set, SIGUSR2);
+	pthread_sigmask(SIG_BLOCK, &set, NULL);
+}
+
+static void ublk_wait_fetch_signal(void)
+{
+	sigset_t set;
+	int sig;
+
+	sigemptyset(&set);
+	sigaddset(&set, SIGUSR2);
+	sigwait(&set, &sig);
+}
+
 static int ublk_thread_is_idle(struct ublk_thread *t)
 {
 	return !io_uring_sq_ready(&t->ring) && !t->io_inflight;
@@ -1320,12 +1345,22 @@ static __attribute__((noinline)) int __ublk_io_handler_fn(struct ublk_thread_inf
 	ublk_dbg(UBLK_DBG_THREAD, "tid %d: ublk dev %d thread %u started\n",
 			gettid(), dev_id, t.idx);
 
+	if (t.dev->exit_after_fetch && t.idx == 1)
+		ublk_wait_fetch_signal();
+
 	if (!ublk_thread_batch_io(&t)) {
 		/* submit all io commands to ublk driver */
 		ublk_submit_fetch_commands(&t);
 	} else {
 		ublk_batch_setup_queues(&t);
 		ublk_batch_start_fetch(&t);
+	}
+
+	if (t.dev->exit_after_fetch && t.idx == 0) {
+		io_uring_submit(&t.ring);
+		/* unmaps the rings too: a mapping keeps the ring from going */
+		io_uring_queue_exit(&t.ring);
+		return 0;
 	}
 
 	do {
@@ -1756,6 +1791,10 @@ static int ublk_start_daemon(const struct dev_ctx *ctx, struct ublk_dev *dev)
 		}
 	}
 
+	/* the IO threads inherit the mask */
+	if (dev->exit_after_fetch)
+		ublk_block_fetch_signal();
+
 	for (i = 0; i < dev->nthreads; i++) {
 		tinfo[i].dev = dev;
 		tinfo[i].idx = i;
@@ -2030,6 +2069,7 @@ static int __cmd_dev_add(const struct dev_ctx *ctx)
 		info->flags |= UBLK_F_QUIESCE;
 	dev->nthreads = nthreads;
 	dev->per_io_tasks = ctx->per_io_tasks;
+	dev->exit_after_fetch = ctx->exit_after_fetch;
 	dev->bad_buf_index = ctx->bad_buf_index;
 	dev->bad_fetch_buf = ctx->bad_fetch_buf;
 	dev->hold_io = ctx->hold_io;
@@ -2436,6 +2476,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[-e 0|1 ] [-i 0|1] [--no_ublk_fixed_fd]\n");
 	printf("\t[--no_end_recovery] recover: fetch, but never send END_USER_RECOVERY\n");
 	printf("\t[--nthreads threads] [--per_io_tasks]\n");
+	printf("\t[--exit_after_fetch] with --per_io_tasks --nthreads 2: thread 0 closes its ring after its FETCH_REQs, thread 1 fetches on SIGUSR2\n");
 	printf("\t[--refetch_on_signal] SIGUSR1 stops reaping, SIGUSR2 sends FETCH_REQ on tag 0\n");
 	printf("\t[--refetch_unready] with --refetch_on_signal: tags 0 and 1 unfetched, no reaping after SIGUSR2\n");
 	printf("\t[--park_on_signal] SIGUSR1 stops reaping, SIGUSR2 resumes it; also with --batch\n");
@@ -2517,6 +2558,7 @@ int main(int argc, char *argv[])
 		{ "size",		1,	NULL, 's'},
 		{ "nthreads",		1,	NULL,  0 },
 		{ "per_io_tasks",	0,	NULL,  0 },
+		{ "exit_after_fetch",	0,	NULL,  0 },
 		{ "no_ublk_fixed_fd",	0,	NULL,  0 },
 		{ "integrity_capable",	0,	NULL,  0 },
 		{ "integrity_reftag",	0,	NULL,  0 },
@@ -2655,6 +2697,8 @@ int main(int argc, char *argv[])
 				ctx.nthreads = strtol(optarg, NULL, 10);
 			if (!strcmp(longopts[option_idx].name, "per_io_tasks"))
 				ctx.per_io_tasks = 1;
+			if (!strcmp(longopts[option_idx].name, "exit_after_fetch"))
+				ctx.exit_after_fetch = 1;
 			if (!strcmp(longopts[option_idx].name, "no_ublk_fixed_fd"))
 				ctx.no_ublk_fixed_fd = 1;
 			if (!strcmp(longopts[option_idx].name, "integrity_capable"))
@@ -2769,6 +2813,12 @@ int main(int argc, char *argv[])
 
 	if (ctx.per_io_tasks && (ctx.flags & UBLK_F_BATCH_IO)) {
 		ublk_err("per_io_task and F_BATCH_IO conflict\n");
+		return -EINVAL;
+	}
+
+	/* thread 0's queue needs the tags of thread 1, which takes the signal */
+	if (ctx.exit_after_fetch && (!ctx.per_io_tasks || ctx.nthreads != 2)) {
+		ublk_err("exit_after_fetch needs per_io_tasks and two threads\n");
 		return -EINVAL;
 	}
 
