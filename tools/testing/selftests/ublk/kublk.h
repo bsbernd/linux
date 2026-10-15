@@ -98,6 +98,7 @@ struct dev_ctx {
 	unsigned int	refetch_on_signal:1;
 	unsigned int	refetch_unready:1;
 	unsigned int	park_on_signal:1;
+	unsigned int	commit_on_signal:1;
 	unsigned int	hold_zc_buf:1;
 	unsigned int	no_ublk_fixed_fd:1;
 	unsigned int	safe_stop:1;
@@ -306,6 +307,7 @@ struct ublk_dev {
 	unsigned refetch_on_signal;
 	unsigned refetch_unready;
 	unsigned park_on_signal;
+	unsigned commit_on_signal;
 
 	void *private_data;
 };

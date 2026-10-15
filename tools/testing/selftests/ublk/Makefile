@@ -97,6 +97,7 @@ TEST_PROGS += test_teardown_srv_owned.sh
 TEST_PROGS += test_teardown_stop_batch_fetch.sh
 TEST_PROGS += test_teardown_stop_commit_held.sh
 TEST_PROGS += test_teardown_stop_owned.sh
+TEST_PROGS += test_teardown_stop_refused_tw.sh
 TEST_PROGS += test_teardown_stop_tw_handback.sh
 
 TEST_FILES := settings

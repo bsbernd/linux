@@ -1112,6 +1112,25 @@ static void ublk_refetch_on_signal(struct ublk_thread *t)
 	pthread_sigmask(SIG_SETMASK, &old, NULL);
 	ublk_refetch_state = UBLK_REFETCH_IDLE;
 
+	/*
+	 * --commit_on_signal: the server does not own tag 0, so the kernel
+	 * refuses this inline, before the task work runs at the next reap
+	 */
+	if (t->dev->commit_on_signal) {
+		io->flags = UBLKS_IO_FREE | UBLKS_IO_NEED_COMMIT_RQ_COMP;
+		io->result = 0;
+		ublk_queue_io_cmd(t, io);
+		io_uring_submit(&t->ring);
+
+		/* the CQ was empty when parking, so the first CQE is this commit */
+		if (io_uring_peek_cqe(&t->ring, &cqe) == 0 &&
+		    user_data_to_op(cqe->user_data) ==
+		    _IOC_NR(UBLK_U_IO_COMMIT_AND_FETCH_REQ))
+			ublk_kmsg("kublk: dev %d COMMIT_AND_FETCH_REQ on tag 0: res %d\n",
+				  dev_id, cqe->res);
+		return;
+	}
+
 	/* --park_on_signal: SIGUSR2 only resumes reaping */
 	if (t->dev->park_on_signal)
 		return;
@@ -2020,6 +2039,7 @@ static int __cmd_dev_add(const struct dev_ctx *ctx)
 	dev->refetch_on_signal = ctx->refetch_on_signal;
 	dev->refetch_unready = ctx->refetch_unready;
 	dev->park_on_signal = ctx->park_on_signal;
+	dev->commit_on_signal = ctx->commit_on_signal;
 
 	for (i = 0; i < MAX_BACK_FILES; i++) {
 		if (ctx->files[i]) {
@@ -2419,6 +2439,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--refetch_on_signal] SIGUSR1 stops reaping, SIGUSR2 sends FETCH_REQ on tag 0\n");
 	printf("\t[--refetch_unready] with --refetch_on_signal: tags 0 and 1 unfetched, no reaping after SIGUSR2\n");
 	printf("\t[--park_on_signal] SIGUSR1 stops reaping, SIGUSR2 resumes it; also with --batch\n");
+	printf("\t[--commit_on_signal] with --park_on_signal: SIGUSR2 sends COMMIT_AND_FETCH_REQ on tag 0, then resumes reaping\n");
 	printf("\t[--integrity_capable] [--integrity_reftag] [--metadata_size SIZE] "
 		 "[--pi_offset OFFSET] [--csum_type ip|t10dif|nvme] [--tag_size SIZE]\n");
 	printf("\t[--batch|-b] [--rotate_auto_buf] [--no_auto_part_scan]\n");
@@ -2507,6 +2528,7 @@ int main(int argc, char *argv[])
 		{ "refetch_on_signal",	0,	NULL,  0 },
 		{ "refetch_unready",	0,	NULL,  0 },
 		{ "park_on_signal",	0,	NULL,  0 },
+		{ "commit_on_signal",	0,	NULL,  0 },
 		{ "batch",              0,      NULL, 'b'},
 		{ "rotate_auto_buf",	0,	NULL,  0 },
 		{ "hold_io",		0,	NULL,  0 },
@@ -2672,6 +2694,8 @@ int main(int argc, char *argv[])
 				ctx.refetch_on_signal = 1;
 				ctx.park_on_signal = 1;
 			}
+			if (!strcmp(longopts[option_idx].name, "commit_on_signal"))
+				ctx.commit_on_signal = 1;
 			if (!strcmp(longopts[option_idx].name, "no_auto_part_scan"))
 				ctx.flags |= UBLK_F_NO_AUTO_PART_SCAN;
 			if (!strcmp(longopts[option_idx].name, "hold_io"))
@@ -2753,6 +2777,12 @@ int main(int argc, char *argv[])
 	    (ctx.nr_hw_queues != 1 || ctx.nthreads > 1 ||
 	     ((ctx.flags & UBLK_F_BATCH_IO) && !ctx.park_on_signal))) {
 		ublk_err("refetch_on_signal needs one queue, one thread, no batch\n");
+		return -EINVAL;
+	}
+
+	if (ctx.commit_on_signal &&
+	    (!ctx.park_on_signal || (ctx.flags & UBLK_F_BATCH_IO))) {
+		ublk_err("commit_on_signal needs park_on_signal, no batch\n");
 		return -EINVAL;
 	}
 
