@@ -191,6 +191,9 @@ struct ublk_batch_io_data {
  */
 #define UBLK_IO_FLAG_AUTO_BUF_REG 	0x10
 
+/* a queued task work owns the command parked on this io and completes it */
+#define UBLK_IO_FLAG_CMD_TW_PENDING	0x20
+
 /* atomic RW with ubq->cancel_lock */
 #define UBLK_IO_FLAG_CANCELED	0x80000000
 
@@ -1893,6 +1896,10 @@ static void ublk_dispatch_req(struct ublk_queue *ubq, struct request *req)
 	u16 tag = req->tag;
 	struct ublk_io *io = &ubq->ios[tag];
 
+	ublk_io_lock(io);
+	io->flags &= ~UBLK_IO_FLAG_CMD_TW_PENDING;
+	ublk_io_unlock(io);
+
 	ublk_setup_iod(ubq, req);
 	pr_devel("%s: complete: qid %d tag %d io_flags %x addr %llx\n",
 			__func__, ubq->q_id, req->tag, io->flags,
@@ -2204,12 +2211,21 @@ static void ublk_batch_queue_cmd(struct ublk_queue *ubq, struct request *rq, boo
 		io_uring_cmd_complete_in_task(fcmd->cmd, ublk_batch_tw_cb);
 }
 
+/* before queueing: the task work may run, and clear it, right after */
+static void ublk_mark_tw_pending(struct ublk_io *io)
+{
+	ublk_io_lock(io);
+	io->flags |= UBLK_IO_FLAG_CMD_TW_PENDING;
+	ublk_io_unlock(io);
+}
+
 static void ublk_queue_cmd(struct ublk_queue *ubq, struct request *rq)
 {
 	struct io_uring_cmd *cmd = ubq->ios[rq->tag].cmd;
 	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
 
 	pdu->req = rq;
+	ublk_mark_tw_pending(&ubq->ios[rq->tag]);
 	ublk_td_count(ubq->dev, tw_queued);
 	io_uring_cmd_complete_in_task(cmd, ublk_cmd_tw_cb);
 }
@@ -2237,7 +2253,14 @@ static void ublk_queue_cmd_list(struct ublk_io *io, struct rq_list *l)
 	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
 	/* COMMIT_AND_FETCH frees the tag before it writes pdu->ubq */
 	struct ublk_queue *this_q = rq_list_peek(l)->mq_hctx->driver_data;
+	struct request *rq;
 
+	/* each request's dispatch completes the command of its own tag */
+	rq_list_for_each(l, rq) {
+		struct ublk_queue *ubq = rq->mq_hctx->driver_data;
+
+		ublk_mark_tw_pending(&ubq->ios[rq->tag]);
+	}
 	pdu->req_list = rq_list_peek(l);
 	rq_list_init(l);
 	ublk_td_count(this_q->dev, tw_queued);
@@ -2619,8 +2642,11 @@ static void ublk_set_canceling(struct ublk_device *ub, bool canceling)
 	u16 i;
 
 	ub->canceling = canceling;
-	for (i = 0; i < ub->dev_info.nr_hw_queues; i++)
-		ublk_get_queue(ub, i)->canceling = canceling;
+	for (i = 0; i < ub->dev_info.nr_hw_queues; i++) {
+		struct ublk_queue *ubq = ublk_get_queue(ub, i);
+
+		WRITE_ONCE(ubq->canceling, canceling);
+	}
 }
 
 static bool ublk_check_and_reset_active_ref(struct ublk_device *ub)
@@ -3211,7 +3237,7 @@ static void ublk_reset_io_flags(struct ublk_queue *ubq, struct ublk_io *io)
 static void ublk_queue_reset_io_flags(struct ublk_queue *ubq)
 {
 	spin_lock(&ubq->cancel_lock);
-	ubq->canceling = false;
+	WRITE_ONCE(ubq->canceling, false);
 	spin_unlock(&ubq->cancel_lock);
 	ubq->fail_io = false;
 	ubq->force_abort = false;
@@ -3334,6 +3360,42 @@ ublk_fill_io_cmd(struct ublk_io *io, struct io_uring_cmd *cmd)
 	io->flags &= ~UBLK_IO_FLAG_OWNED_BY_SRV;
 
 	return req;
+}
+
+/*
+ * Take a parked command back once the queue is canceling - the tag walk that
+ * aborts parked commands on teardown (ublk_cancel_dev) runs once, so a
+ * command parked after its own tag was walked would never be completed.
+ *
+ * @return 0 to leave the command parked, otherwise the value the caller must
+ * return.
+ */
+static int ublk_check_canceling(struct ublk_queue *ubq, struct ublk_io *io)
+{
+	bool canceled;
+
+	if (likely(!READ_ONCE(ubq->canceling)))
+		return 0;
+
+	ublk_io_lock(io);
+	/* the queued task work completes the command, ->canceling or not */
+	if (io->flags & UBLK_IO_FLAG_CMD_TW_PENDING) {
+		ublk_io_unlock(io);
+		return 0;
+	}
+	spin_lock(&ubq->cancel_lock);
+	canceled = !!(io->flags & UBLK_IO_FLAG_CANCELED);
+	if (!canceled) {
+		io->flags |= UBLK_IO_FLAG_CANCELED;
+		/* ACTIVE means a parked command, and this takes it */
+		io->flags &= ~UBLK_IO_FLAG_ACTIVE;
+		io->cmd = NULL;
+	}
+	spin_unlock(&ubq->cancel_lock);
+	ublk_io_unlock(io);
+
+	/* ublk_cancel_cmd() got here first and already completed the cmd */
+	return canceled ? -EIOCBQUEUED : UBLK_IO_RES_ABORT;
 }
 
 static inline void ublk_prep_cancel(struct io_uring_cmd *cmd,
@@ -3704,6 +3766,10 @@ static int ublk_ch_uring_cmd_local(struct io_uring_cmd *cmd,
 	delay_us = ublk_delay_us(ub, cancel_check);
 	if (delay_us)
 		msleep(delay_us / USEC_PER_MSEC);
+	ret = ublk_check_canceling(ubq, io);
+	if (unlikely(ret))
+		return ret;
+
 	ublk_prep_cancel(cmd, issue_flags, ubq, tag);
 	return -EIOCBQUEUED;
 
@@ -3889,7 +3955,7 @@ static int ublk_batch_unprep_io(struct ublk_queue *ubq,
 	if (ublk_queue_ready(ubq)) {
 		data->ub->nr_queue_ready--;
 		spin_lock(&ubq->cancel_lock);
-		ubq->canceling = true;
+		WRITE_ONCE(ubq->canceling, true);
 		spin_unlock(&ubq->cancel_lock);
 	}
 	ubq->nr_io_ready--;
@@ -4576,6 +4642,8 @@ static void ublk_debugfs_put_io_flags(struct seq_file *sf, unsigned int flags)
 		seq_puts(sf, "NEED_GET_DATA ");
 	if (flags & UBLK_IO_FLAG_AUTO_BUF_REG)
 		seq_puts(sf, "AUTO_BUF_REG ");
+	if (flags & UBLK_IO_FLAG_CMD_TW_PENDING)
+		seq_puts(sf, "CMD_TW_PENDING ");
 	if (flags & UBLK_IO_FLAG_CANCELED)
 		seq_puts(sf, "CANCELED ");
 }
