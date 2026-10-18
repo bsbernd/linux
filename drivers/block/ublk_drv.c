@@ -393,6 +393,7 @@ struct ublk_delay_point {
 
 struct ublk_delay_points {
 	struct ublk_delay_point	cancel_check;
+	struct ublk_delay_point	cancel_cmd_done;
 };
 
 static u32 ublk_delay_point_us(struct ublk_delay_point *point)
@@ -2917,6 +2918,7 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	struct ublk_device *ub = ubq->dev;
 	struct io_uring_cmd *cmd = NULL;
 	struct request *req;
+	u32 delay_us;
 	bool done;
 
 	ublk_io_lock(io);
@@ -2955,6 +2957,10 @@ static void ublk_cancel_cmd(struct ublk_queue *ubq, u16 tag,
 	ublk_io_unlock(io);
 
 	if (!done && cmd) {
+		/* emulates a preemption between taking and completing the cmd */
+		delay_us = ublk_delay_us(ub, cancel_cmd_done);
+		if (delay_us)
+			msleep(delay_us / USEC_PER_MSEC);
 		ublk_td_count(ub, cancel_done);
 		io_uring_cmd_done(cmd, UBLK_IO_RES_ABORT, issue_flags);
 	}
@@ -4741,6 +4747,8 @@ static void ublk_debugfs_delay_points(struct ublk_device *ub)
 {
 	ublk_debugfs_delay_point(&ub->delay.cancel_check, "delay_cancel_check",
 				 ub->debugfs_dir);
+	ublk_debugfs_delay_point(&ub->delay.cancel_cmd_done,
+				 "delay_cancel_cmd_done", ub->debugfs_dir);
 }
 #else
 static inline void ublk_debugfs_delay_points(struct ublk_device *ub) { }
