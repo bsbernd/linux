@@ -3064,7 +3064,13 @@ static void ublk_uring_cmd_cancel_fn(struct io_uring_cmd *cmd,
 
 	ublk_start_cancel(ubq->dev);
 
-	WARN_ON_ONCE(io->cmd != cmd);
+	/*
+	 * NULL: the command was taken but is not completed yet, and io_uring
+	 * drops it from the cancelable list only on completion. A different
+	 * command would mean the tag was re-parked while this one was still
+	 * cancelable.
+	 */
+	WARN_ON_ONCE(io->cmd && io->cmd != cmd);
 	ublk_cancel_cmd(ubq, pdu->tag, issue_flags);
 }
 
