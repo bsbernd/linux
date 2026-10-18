@@ -323,14 +323,15 @@ __run_io_and_remove()
 	local size=$2
 	local kill_server=$3
 
+	# a job that opens after the delete must not create a regular file
 	fio --name=job1 --filename=/dev/ublkb"${dev_id}" --ioengine=libaio \
 		--rw=randrw --norandommap --iodepth=256 --size="${size}" --numjobs="$(nproc)" \
-		--runtime=20 --time_based > /dev/null 2>&1 &
+		--runtime=20 --time_based --allow_file_create=0 > /dev/null 2>&1 &
 	fio --name=batchjob --filename=/dev/ublkb"${dev_id}" --ioengine=io_uring \
 		--rw=randrw --norandommap --iodepth=256 --size="${size}" \
 		--numjobs="$(nproc)" --runtime=20 --time_based \
 		--iodepth_batch_submit=32 --iodepth_batch_complete_min=32 \
-		--force_async=7 > /dev/null 2>&1 &
+		--force_async=7 --allow_file_create=0 > /dev/null 2>&1 &
 	sleep 2
 	if [ "${kill_server}" = "yes" ]; then
 		local state
