@@ -577,6 +577,58 @@ _get_metadata_size()
 	"$METADATA_SIZE_PROG" "/dev/ublkb$dev_id" | grep "$field" | grep -o "[0-9]*"
 }
 
+# Helpers that read debugfs take its root from DEBUGFS_ROOT, which the test sets.
+
+# delay_us first and times last: an armed point with the old delay_us would
+# fire without delaying
+# Usage: _ublk_arm_delay_point <dev_id> <name> <delay_us>
+_ublk_arm_delay_point() {
+	local dir=${DEBUGFS_ROOT}/$1/$2
+
+	echo "$3" > "${dir}/delay_us"
+	echo 0 > "${dir}/verbose"
+	echo 100 > "${dir}/probability"
+	echo 1 > "${dir}/times"
+}
+
+# should_fail() counts times down to 0 when it fires.
+# Usage: _ublk_delay_point_fired <dev_id> <name>
+_ublk_delay_point_fired() {
+	[ "$(cat "${DEBUGFS_ROOT}/$1/$2/times")" -eq 0 ]
+}
+
+# Polled in tenths: what the test races against the delay has to fit in it.
+# Usage: _ublk_wait_delay_point_fired <dev_id> <name> <deadline>
+_ublk_wait_delay_point_fired() {
+	local tenths=0
+
+	while [ "$tenths" -lt $(($3 * 10)) ]; do
+		if _ublk_delay_point_fired "$1" "$2"; then
+			return 0
+		fi
+		sleep 0.1
+		tenths=$((tenths + 1))
+	done
+	return 1
+}
+
+# Return 0 once the process has exited, 1 if it is still there at the deadline.
+# Usage: _ublk_wait_pid_gone <pid> <deadline>
+_ublk_wait_pid_gone() {
+	local pid=$1
+	local secs=0
+
+	while [ "$secs" -lt "$2" ]; do
+		if ! kill -0 "$pid" 2>/dev/null; then
+			wait "$pid" > /dev/null 2>&1
+			return 0
+		fi
+		sleep 1
+		secs=$((secs + 1))
+	done
+	return 1
+}
+
 UBLK_PROG=$(_ublk_test_top_dir)/kublk
 UBLK_TEST_QUIET=1
 UBLK_TEST_SHOW_RESULT=1
