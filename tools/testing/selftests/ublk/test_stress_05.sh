@@ -20,9 +20,10 @@ run_io_and_remove()
 
 	[ "$UBLK_TEST_QUIET" -eq 0 ] && echo "run ublk IO vs. remove device(ublk add $*)"
 
+	# a job that opens after the delete must not create a regular file
 	fio --name=job1 --filename=/dev/ublkb"${dev_id}" --ioengine=libaio \
 		--rw=readwrite --iodepth=128 --size="${size}" --numjobs=4 \
-		--runtime=40 --time_based > /dev/null 2>&1 &
+		--runtime=40 --time_based --allow_file_create=0 > /dev/null 2>&1 &
 	sleep 4
 
 	dev_pid=$(_get_ublk_daemon_pid "$dev_id")
