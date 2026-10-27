@@ -157,14 +157,18 @@ struct fuse_queue_map {
 	/* Tracks which queues are registered */
 	cpumask_var_t registered_q_mask;
 	size_t nr_queues;
-
-	/* cpu to qid mapping */
-	int *cpu_to_qid;
 };
 
 struct fuse_queue_maps {
 	struct rcu_head rcu;
 	struct fuse_queue_map global;
+
+	/* cpu to qid mapping */
+	int *global_cpu_to_qid;
+
+	/* a CPU is on one node, so the nodes share one array */
+	int *numa_cpu_to_qid;
+
 	struct fuse_queue_map numa[];
 };
 

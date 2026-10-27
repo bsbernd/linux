@@ -269,7 +269,6 @@ bool fuse_uring_request_expired(struct fuse_chan *fch)
 static void fuse_uring_free_q_map(struct fuse_queue_map *q_map)
 {
 	free_cpumask_var(q_map->registered_q_mask);
-	kfree(q_map->cpu_to_qid);
 }
 
 static void fuse_uring_free_q_maps(struct fuse_queue_maps *maps)
@@ -282,6 +281,8 @@ static void fuse_uring_free_q_maps(struct fuse_queue_maps *maps)
 	fuse_uring_free_q_map(&maps->global);
 	for (node = 0; node < nr_node_ids; node++)
 		fuse_uring_free_q_map(&maps->numa[node]);
+	kfree(maps->global_cpu_to_qid);
+	kfree(maps->numa_cpu_to_qid);
 	kfree(maps);
 }
 
@@ -336,11 +337,6 @@ static int fuse_uring_alloc_q_map(struct fuse_queue_map *q_map)
 	if (!zalloc_cpumask_var(&q_map->registered_q_mask, GFP_KERNEL_ACCOUNT))
 		return -ENOMEM;
 
-	q_map->cpu_to_qid = kzalloc_objs(*q_map->cpu_to_qid, nr_cpu_ids,
-					 GFP_KERNEL_ACCOUNT);
-	if (!q_map->cpu_to_qid)
-		return -ENOMEM;
-
 	return 0;
 }
 
@@ -351,6 +347,13 @@ static struct fuse_queue_maps *fuse_uring_alloc_q_maps(void)
 
 	maps = kzalloc_flex(*maps, numa, nr_node_ids, GFP_KERNEL_ACCOUNT);
 	if (!maps)
+		goto err;
+
+	maps->global_cpu_to_qid = kzalloc_objs(*maps->global_cpu_to_qid,
+					       nr_cpu_ids, GFP_KERNEL_ACCOUNT);
+	maps->numa_cpu_to_qid = kzalloc_objs(*maps->numa_cpu_to_qid,
+					     nr_cpu_ids, GFP_KERNEL_ACCOUNT);
+	if (!maps->global_cpu_to_qid || !maps->numa_cpu_to_qid)
 		goto err;
 
 	if (fuse_uring_alloc_q_map(&maps->global))
@@ -385,7 +388,8 @@ static int fuse_uring_cpu_to_node(int cpu)
 	return node;
 }
 
-static void fuse_uring_cpu_qid_mapping(struct fuse_queue_map *q_map, int node)
+static void fuse_uring_cpu_qid_mapping(struct fuse_queue_map *q_map,
+				       int *cpu_to_qid, int node)
 {
 	int cpu, qid_idx, mapping_count = 0;
 
@@ -399,13 +403,12 @@ static void fuse_uring_cpu_qid_mapping(struct fuse_queue_map *q_map, int node)
 
 		/* Prefer the queue belonging to the current cpu */
 		if (cpumask_test_cpu(cpu, q_map->registered_q_mask)) {
-			q_map->cpu_to_qid[cpu] = cpu;
+			cpu_to_qid[cpu] = cpu;
 			continue;
 		}
 
 		qid_idx = mapping_count % q_map->nr_queues;
-		q_map->cpu_to_qid[cpu] = cpumask_nth(qid_idx,
-						     q_map->registered_q_mask);
+		cpu_to_qid[cpu] = cpumask_nth(qid_idx, q_map->registered_q_mask);
 		mapping_count++;
 	}
 }
@@ -448,7 +451,8 @@ static struct fuse_ring *fuse_uring_create(struct fuse_chan *fch, bool reduced_q
 		/* valid qids are 0...nr_queues - 1, not 0...nr_cpu_ids - 1 */
 		bitmap_clear(cpumask_bits(maps->global.registered_q_mask),
 			     nr_queues, nr_cpu_ids - nr_queues);
-		fuse_uring_cpu_qid_mapping(&maps->global, NUMA_NO_NODE);
+		fuse_uring_cpu_qid_mapping(&maps->global,
+					   maps->global_cpu_to_qid, NUMA_NO_NODE);
 	}
 
 	max_payload_size = max(FUSE_MIN_READ_BUFFER, fch->max_write);
@@ -494,20 +498,19 @@ static void fuse_uring_build_q_maps(struct fuse_queue_maps *maps)
 				maps->numa[node].registered_q_mask);
 	}
 
-	fuse_uring_cpu_qid_mapping(&maps->global, -1);
-	for (node = 0; node < nr_node_ids; node++) {
-		/*
-		 * Gives every entry a registered qid. CPU hot add can move a
-		 * CPU into this node after the last
-		 * FUSE_IO_URING_CMD_ADD_QUEUE. Without the copy, a request on
-		 * that CPU gets qid 0, which may not be registered.
-		 */
-		if (!cpumask_empty(maps->numa[node].registered_q_mask))
-			memcpy(maps->numa[node].cpu_to_qid,
-			       maps->global.cpu_to_qid,
-			       nr_cpu_ids * sizeof(*maps->global.cpu_to_qid));
-		fuse_uring_cpu_qid_mapping(&maps->numa[node], node);
-	}
+	fuse_uring_cpu_qid_mapping(&maps->global, maps->global_cpu_to_qid, -1);
+
+	/*
+	 * Gives every entry a registered qid. CPU hot add can move a CPU into
+	 * a node with queues after the last FUSE_IO_URING_CMD_ADD_QUEUE.
+	 * Without the copy, a request on that CPU gets qid 0, which may not
+	 * be registered.
+	 */
+	memcpy(maps->numa_cpu_to_qid, maps->global_cpu_to_qid,
+	       nr_cpu_ids * sizeof(*maps->global_cpu_to_qid));
+	for (node = 0; node < nr_node_ids; node++)
+		fuse_uring_cpu_qid_mapping(&maps->numa[node],
+					   maps->numa_cpu_to_qid, node);
 }
 
 /* Returns the replaced maps, to be freed after an RCU grace period */
@@ -2015,7 +2018,7 @@ static struct fuse_ring_queue *fuse_uring_select_queue(struct fuse_ring *ring,
 
 	q_map = &maps->numa[node];
 	if (q_map->nr_queues) {
-		qid = q_map->cpu_to_qid[cpu];
+		qid = maps->numa_cpu_to_qid[cpu];
 		if (qid == cpu && background)
 			qid = cpumask_next_wrap(qid, q_map->registered_q_mask);
 retry:
@@ -2041,7 +2044,7 @@ retry:
 		goto out;
 	}
 
-	qid = maps->global.cpu_to_qid[cpu];
+	qid = maps->global_cpu_to_qid[cpu];
 
 	queue = READ_ONCE(ring->queues[qid]);
 	WARN_ONCE(!queue, "Missing queue for qid %d\n", qid);
