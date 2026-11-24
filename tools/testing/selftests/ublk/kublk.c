@@ -819,7 +819,7 @@ static void ublk_refetch_signal(int sig)
 }
 
 /* The daemon has no stdout, so the test reads its markers from the kernel log. */
-static void ublk_kmsg(const char *fmt, ...)
+void ublk_kmsg(const char *fmt, ...)
 {
 	char buf[128];
 	va_list ap;
@@ -1790,6 +1790,7 @@ static int __cmd_dev_add(const struct dev_ctx *ctx)
 	dev->per_io_tasks = ctx->per_io_tasks;
 	dev->bad_buf_index = ctx->bad_buf_index;
 	dev->hold_io = ctx->hold_io;
+	dev->no_refetch_on_enobufs = ctx->no_refetch_on_enobufs;
 	dev->tgt.ops = ops;
 	dev->tgt.sq_depth = depth;
 	dev->tgt.cq_depth = depth;
@@ -2224,6 +2225,7 @@ static void __cmd_create_help(char *exe, bool recovery)
 	printf("\t[--hold_io_on_signal] SIGUSR1 holds fetched requests in the server, SIGUSR2 completes them\n");
 	printf("\t[--self_del] delete our own device on SIGINT/SIGTERM\n");
 	printf("\t[--hold_io] never complete a fetched request, leaving the tag owned by the server\n");
+	printf("\t[--no_refetch_on_enobufs] with --batch: no new FETCH_IO_CMDS after one ended with -ENOBUFS\n");
 	printf("\t[target options] [backfile1] [backfile2] ...\n");
 	printf("\tdefault: nr_queues=2(max 32), depth=128(max 1024), dev_id=-1(auto allocation)\n");
 	printf("\tdefault: nthreads=nr_queues");
@@ -2311,6 +2313,7 @@ int main(int argc, char *argv[])
 		{ "rotate_auto_buf",	0,	NULL,  0 },
 		{ "self_del",		0,	NULL,  0 },
 		{ "hold_io",		0,	NULL,  0 },
+		{ "no_refetch_on_enobufs", 0,	NULL,  0 },
 		{ "no_auto_part_scan",	0,	NULL,  0 },
 		{ "shmem_zc",		0,	NULL,  0  },
 		{ "htlb",		1,	NULL,  0  },
@@ -2481,6 +2484,8 @@ int main(int argc, char *argv[])
 				ctx.self_del = 1;
 			if (!strcmp(longopts[option_idx].name, "hold_io"))
 				ctx.hold_io = 1;
+			if (!strcmp(longopts[option_idx].name, "no_refetch_on_enobufs"))
+				ctx.no_refetch_on_enobufs = 1;
 			if (!strcmp(longopts[option_idx].name, "shmem_zc"))
 				ctx.flags |= UBLK_F_SHMEM_ZC;
 			if (!strcmp(longopts[option_idx].name, "htlb"))
@@ -2621,6 +2626,11 @@ int main(int argc, char *argv[])
 	    !((ctx.flags & UBLK_F_AUTO_BUF_REG) &&
 	      (ctx.flags & UBLK_F_BATCH_IO))) {
 		ublk_err("rotate_auto_buf requires --auto_zc and --batch\n");
+		return -EINVAL;
+	}
+
+	if (ctx.no_refetch_on_enobufs && !(ctx.flags & UBLK_F_BATCH_IO)) {
+		ublk_err("no_refetch_on_enobufs needs --batch\n");
 		return -EINVAL;
 	}
 

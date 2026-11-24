@@ -109,6 +109,7 @@ struct dev_ctx {
 	unsigned int	hold_io_on_signal:1;
 	unsigned int	hold_io:1;
 	unsigned int	self_del:1;
+	unsigned int	no_refetch_on_enobufs:1;
 	__u32 integrity_flags;
 	__u8 metadata_size;
 	__u8 pi_offset;
@@ -264,6 +265,8 @@ struct ublk_thread {
 	unsigned state;
 	unsigned int cmd_inflight;
 	unsigned int io_inflight;
+	/* --no_refetch_on_enobufs: FETCH_IO_CMDS ended by -ENOBUFS */
+	unsigned int nr_fetch_dropped;
 
 	unsigned short nr_bufs;
 	unsigned short auto_buf_stride;
@@ -296,6 +299,7 @@ struct ublk_dev {
 	unsigned nthreads;
 	unsigned per_io_tasks;
 	unsigned hold_io;
+	unsigned no_refetch_on_enobufs;
 
 	int fds[MAX_BACK_FILES + 1];	/* fds[0] points to /dev/ublkcN */
 	int nr_fds;
@@ -310,6 +314,7 @@ struct ublk_dev {
 };
 
 extern int ublk_queue_io_cmd(struct ublk_thread *t, struct ublk_io *io);
+extern void ublk_kmsg(const char *fmt, ...);
 
 static inline int ublk_setup_ring(struct io_uring *r, int depth,
 		int cq_depth, unsigned int flags)

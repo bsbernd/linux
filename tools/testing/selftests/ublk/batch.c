@@ -452,6 +452,12 @@ void ublk_batch_compl_cmd(struct ublk_thread *t,
 	if (cqe->res < 0 && cqe->res != -ENOBUFS) {
 		t->cmd_inflight--;
 		t->state |= UBLKS_T_STOPPING;
+	} else if (cqe->res == -ENOBUFS && t->dev->no_refetch_on_enobufs) {
+		/* the thread stays up, so the queue's tags wait in the driver */
+		t->cmd_inflight--;
+		t->nr_fetch_dropped++;
+		ublk_kmsg("kublk: dev %d thread %u dropped %u fetch commands\n",
+			  t->dev->dev_info.dev_id, t->idx, t->nr_fetch_dropped);
 	} else if (!(cqe->flags & IORING_CQE_F_MORE) || cqe->res == -ENOBUFS) {
 		t->cmd_inflight--;
 		ublk_batch_queue_fetch(t, q, buf_idx);

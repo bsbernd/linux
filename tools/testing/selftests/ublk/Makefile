@@ -88,6 +88,7 @@ TEST_PROGS += test_teardown_quiesce_quiesced.sh
 TEST_PROGS += test_teardown_quiesce_read.sh
 TEST_PROGS += test_teardown_quiesce_started.sh
 TEST_PROGS += test_teardown_end_recovery_kill.sh
+TEST_PROGS += test_teardown_batch_fetch_dropped.sh
 
 TEST_FILES := settings
 TEST_FILES += test_common.sh
