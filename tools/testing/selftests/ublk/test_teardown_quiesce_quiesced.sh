@@ -21,21 +21,6 @@ if ! _have_feature "QUIESCE"; then
 	exit "$UBLK_SKIP_CODE"
 fi
 
-# Echo the PID of the process holding /dev/ublkc<dev_id> open.
-# Usage: _ublk_char_dev_holder <dev_id>
-_ublk_char_dev_holder()
-{
-	local fd
-
-	for fd in /proc/[0-9]*/fd/*; do
-		if [ "$(readlink "$fd" 2>/dev/null)" = "/dev/ublkc$1" ]; then
-			echo "$fd" | cut -d/ -f3
-			return 0
-		fi
-	done
-	return 1
-}
-
 # Usage: quiesce_quiesced <add args...>
 quiesce_quiesced()
 {

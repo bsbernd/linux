@@ -2181,6 +2181,27 @@ out:
 	return ret;
 }
 
+/* END_USER_RECOVERY from a process other than the recovering server */
+static int cmd_dev_end_recovery(struct dev_ctx *ctx)
+{
+	struct ublk_dev *dev = ublk_ctrl_init();
+	int ret = -EINVAL;
+
+	if (!dev)
+		return -ENODEV;
+
+	if (ctx->dev_id < 0 || ctx->daemon_pid <= 0) {
+		fprintf(stderr, "end_recovery needs -n dev_id and --daemon_pid pid\n");
+		goto out;
+	}
+	dev->dev_info.dev_id = ctx->dev_id;
+	ret = ublk_ctrl_end_user_recovery(dev, ctx->daemon_pid);
+
+out:
+	ublk_ctrl_deinit(dev);
+	return ret;
+}
+
 static void __cmd_create_help(char *exe, bool recovery)
 {
 	int i;
@@ -2245,6 +2266,8 @@ static int cmd_dev_help(char *exe)
 	printf("%s features\n", exe);
 	printf("%s update_size -n dev_id -s|--size size_in_bytes \n", exe);
 	printf("%s quiesce -n dev_id\n", exe);
+	printf("%s end_recovery -n dev_id --daemon_pid pid\n", exe);
+	printf("\t send END_USER_RECOVERY for the recovering server pid\n");
 	return 0;
 }
 
@@ -2283,6 +2306,7 @@ int main(int argc, char *argv[])
 		{ "refetch_on_signal",	0,	NULL,  0 },
 		{ "park_on_signal",	0,	NULL,  0 },
 		{ "defer_fetch_queue",	1,	NULL,  0 },
+		{ "daemon_pid",		1,	NULL,  0 },
 		{ "batch",              0,      NULL, 'b'},
 		{ "rotate_auto_buf",	0,	NULL,  0 },
 		{ "self_del",		0,	NULL,  0 },
@@ -2449,6 +2473,8 @@ int main(int argc, char *argv[])
 			}
 			if (!strcmp(longopts[option_idx].name, "defer_fetch_queue"))
 				ctx.defer_fetch_queue = strtol(optarg, NULL, 10);
+			if (!strcmp(longopts[option_idx].name, "daemon_pid"))
+				ctx.daemon_pid = strtol(optarg, NULL, 10);
 			if (!strcmp(longopts[option_idx].name, "no_auto_part_scan"))
 				ctx.flags |= UBLK_F_NO_AUTO_PART_SCAN;
 			if (!strcmp(longopts[option_idx].name, "self_del"))
@@ -2646,6 +2672,8 @@ int main(int argc, char *argv[])
 		ret = cmd_dev_update_size(&ctx);
 	else if (!strcmp(cmd, "quiesce"))
 		ret = cmd_dev_quiesce(&ctx);
+	else if (!strcmp(cmd, "end_recovery"))
+		ret = cmd_dev_end_recovery(&ctx);
 	else
 		cmd_dev_help(argv[0]);
 

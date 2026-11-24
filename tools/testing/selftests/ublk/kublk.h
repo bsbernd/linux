@@ -87,6 +87,7 @@ struct dev_ctx {
 	unsigned queue_depth;
 	int dev_id;
 	int defer_fetch_queue;
+	int daemon_pid;
 	int nr_files;
 	char *files[MAX_BACK_FILES];
 	unsigned int	logging:1;
